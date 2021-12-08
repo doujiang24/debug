@@ -98,7 +98,10 @@ func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 		f.pcdata = append(f.pcdata, r.p.proc.ReadInt32(a))
 		a = a.Add(4)
 	}
-	a = a.Align(r.p.proc.PtrSize())
+	if r.p.proc.PtrSize() == 8 && a&4 != 0 {
+		a = a.Add(4)
+	}
+	// a = a.Align(r.p.proc.PtrSize())
 
 	if nfd.typ.Size == 1 { // go 1.12 and beyond, this is a uint8
 		n = uint32(nfd.Uint8())
@@ -106,6 +109,9 @@ func (m *module) readFunc(r region, pctab region, funcnametab region) *Func {
 		n = uint32(nfd.Int32())
 	}
 	for i := uint32(0); i < n; i++ {
+		if i == uint32(r.p.rtConstants["_PCDATA_StackMapIndex"]) && r.p.proc.ReadPtr(a) == 0 {
+			fmt.Printf("bad stack map address, f name: %v\n", f.name)
+		}
 		f.funcdata = append(f.funcdata, r.p.proc.ReadPtr(a))
 		a = a.Add(r.p.proc.PtrSize())
 	}
