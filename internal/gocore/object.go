@@ -131,7 +131,11 @@ func (p *Process) markObjects() {
 // isPtrFromHeap reports whether the inferior at address a contains a pointer.
 // a must be somewhere in the heap.
 func (p *Process) isPtrFromHeap(a core.Address) bool {
-	return p.findHeapInfo(a).IsPtr(a, p.proc.PtrSize())
+	h := p.findHeapInfo(a)
+	if h == nil {
+		return false
+	}
+	return h.IsPtr(a, p.proc.PtrSize())
 }
 
 // IsPtr reports whether the inferior at address a contains a pointer.
@@ -232,8 +236,12 @@ func (p *Process) Addr(x Object) core.Address {
 }
 
 // Size returns the size of x in bytes.
+//go:noinline
 func (p *Process) Size(x Object) int64 {
-	return p.findHeapInfo(core.Address(x)).size
+	if heap := p.findHeapInfo(core.Address(x)); heap != nil {
+		return heap.size
+	}
+	return 0
 }
 
 // Type returns the type and repeat count for the object x.

@@ -111,6 +111,10 @@ type pageTable4 [1 << 12]*pageTable3
 
 const pageSize Address = 1 << 12
 
+func (p *Process) FindMapping(a Address) *Mapping {
+	return p.findMapping(a)
+}
+
 // findMapping is simple enough that it inlines.
 func (p *Process) findMapping(a Address) *Mapping {
 	t3 := p.pageTable[a>>52]

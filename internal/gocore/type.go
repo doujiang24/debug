@@ -6,9 +6,8 @@ package gocore
 
 import (
 	"fmt"
-	"strings"
-
 	"golang.org/x/debug/internal/core"
+	"strings"
 )
 
 // A Type is the representation of the type of a Go object.
@@ -98,7 +97,7 @@ func (p *Process) DynamicType(t *Type, a core.Address) *Type {
 		if x == 0 {
 			return nil
 		}
-		return p.runtimeType2Type(x)
+		return p.runtimeType2Type(x, a.Add(p.proc.PtrSize()))
 	case KindIface:
 		x := p.proc.ReadPtr(a)
 		if x == 0 {
@@ -106,15 +105,19 @@ func (p *Process) DynamicType(t *Type, a core.Address) *Type {
 		}
 		// Read type out of itab.
 		x = p.proc.ReadPtr(x.Add(p.proc.PtrSize()))
-		return p.runtimeType2Type(x)
+		return p.runtimeType2Type(x, a.Add(p.proc.PtrSize()))
 	}
 }
 
 // Convert the address of a runtime._type to a *Type.
 // Guaranteed to return a non-nil *Type.
-func (p *Process) runtimeType2Type(a core.Address) *Type {
+func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	if t := p.runtimeMap[a]; t != nil {
 		return t
+	}
+
+	if a == 70835840 {
+		fmt.Println("hit")
 	}
 
 	// Read runtime._type.size
@@ -151,6 +154,12 @@ func (p *Process) runtimeType2Type(a core.Address) *Type {
 	// Read ptr/nonptr bits
 	ptrSize := p.proc.PtrSize()
 	nptrs := int64(r.Field("ptrdata").Uintptr()) / ptrSize
+
+	// hack nptrs, it may be very big, no reason yet.
+	if nptrs > 1024*10 {
+		nptrs = 10
+	}
+
 	var ptrs []int64
 	if r.Field("kind").Uint8()&uint8(p.rtConstants["kindGCProg"]) == 0 {
 		gcdata := r.Field("gcdata").Address()
@@ -172,6 +181,23 @@ func (p *Process) runtimeType2Type(a core.Address) *Type {
 			candidates = append(candidates, t)
 		}
 	}
+	/*
+		if len(candidates) == 0 {
+			name1 := strings.TrimPrefix(name, "*")
+			if _, ok := SymbolNameMap[name]; ok {
+				for key, list := range p.runtimeNameMap {
+					if strings.HasPrefix(key, "*gitlab.alipay-ant-") && strings.HasSuffix(key, name1) {
+						for _, t := range list {
+							if len(ptrs) > 0 && size == t.Size && equal(ptrs, t.ptrs()) {
+								fmt.Printf("Match suffix, %v => %v\n", key, name)
+								candidates = append(candidates, t)
+							}
+						}
+					}
+				}
+			}
+		}
+	*/
 	var t *Type
 	if len(candidates) > 0 {
 		// If a runtime type matches more than one DWARF type,
@@ -179,7 +205,32 @@ func (p *Process) runtimeType2Type(a core.Address) *Type {
 		// This looks mostly harmless. DWARF has some redundant entries.
 		// For example, [32]uint8 appears twice.
 		// TODO: investigate the reason for this duplication.
+
+		if len(candidates) > 1 {
+			for i, t := range candidates {
+				fmt.Printf("#%d, typPtr, %v, name: %v, kind: %v, size: %v\n", i, a, t.Name, t.Kind, t.Size)
+			}
+
+			// got two candicates, ptr types.
+			if candidates[0].Size == ptrSize && nptrs == 1 {
+				o := p.proc.ReadPtr(d)
+				size := p.Size(Object(o))
+				var tmp []*Type
+				for _, t := range candidates {
+					if t.Elem != nil && t.Elem.Size == size {
+						tmp = append(tmp, t)
+					}
+				}
+				if len(tmp) == 1 {
+					fmt.Printf("reduced candidates by matching elem object size\n")
+				}
+				if len(tmp) > 0 {
+					candidates = tmp
+				}
+			}
+		}
 		t = candidates[0]
+
 	} else {
 		// There's no corresponding DWARF type.  Make our own.
 		t = &Type{Name: name, Size: size, Kind: KindStruct}
@@ -209,6 +260,15 @@ func (p *Process) runtimeType2Type(a core.Address) *Type {
 		if t.Size%ptrSize != 0 {
 			// TODO: tail of <ptrSize data.
 		}
+	}
+	if t.Name == "*http.connPool" {
+		fmt.Printf("type, kind: %v\n", t.Kind)
+	}
+
+	if t.Name == "*gitlab.alipay-inc.com/ant-mesh/mosn/vendor/mosn.io/mosn/pkg/stream/http.httpBuffers" ||
+		t.Name == "*gitlab.alipay-inc.com/ant-mesh/mosn/vendor/mosn.io/mosn/pkg/stream/http.serverStream" {
+		l := p.runtimeNameMap[name]
+		fmt.Printf("type, kind: %v, l.len: %d\n", t.Kind, len(l))
 	}
 	// Memoize.
 	p.runtimeMap[a] = t
@@ -348,9 +408,26 @@ func (p *Process) typeHeap() {
 		}
 		var work []workRecord
 
+		appendWork := func(w workRecord) {
+			if w.a == 825365401144 {
+				fmt.Printf("hit L2\n")
+			}
+			work = append(work, w)
+		}
+
 		// add records the fact that we know the object at address a has
 		// r copies of type t.
 		add := func(a core.Address, t *Type, r int64) {
+			// fmt.Printf("add, address: 0x%x, type name: %v, type kind: %v\n", a, t.Name, t.Kind)
+			/*
+				addr := fmt.Sprintf("0x%x", a)
+				if addr == "0xc000096090" || addr == "0xc0000980d0" || addr == "0xc00000e010" {
+					fmt.Printf("foo\n")
+				}
+				if addr == "0xc008c2a068" {
+					fmt.Printf("bar\n")
+				}
+			*/
 			if a == 0 { // nil pointer
 				return
 			}
@@ -358,7 +435,16 @@ func (p *Process) typeHeap() {
 			if i < 0 { // pointer doesn't point to an object in the Go heap
 				return
 			}
+			if a == 0xc05b71aa80 {
+				fmt.Printf("hit\n")
+			}
 			if off == 0 {
+				obj, _ := p.FindObject(a)
+				objSize := p.Size(obj)
+				if r*t.Size > objSize {
+					fmt.Printf("ERROR: calculated size(%d * %d = %d) bigger than object size(%d), skipping it ...\n", r, t.Size, r*t.Size, objSize)
+					return
+				}
 				// We have a 0-offset typing. Replace existing 0-offset typing
 				// if the new one is larger.
 				ot := p.types[i].t
@@ -366,14 +452,14 @@ func (p *Process) typeHeap() {
 				if ot == nil || r*t.Size > or*ot.Size {
 					if t == ot {
 						// Scan just the new section.
-						work = append(work, workRecord{
+						appendWork(workRecord{
 							a: a.Add(or * ot.Size),
 							t: t,
 							r: r - or,
 						})
 					} else {
 						// Rescan the whole typing using the updated type.
-						work = append(work, workRecord{
+						appendWork(workRecord{
 							a: a,
 							t: t,
 							r: r,
@@ -442,7 +528,7 @@ func (p *Process) typeHeap() {
 			// with an existing chunk (or chunks), those will get rescanned.
 			// Duplicate work, but that's ok. TODO: but could be expensive.
 			if addWork {
-				work = append(work, workRecord{
+				appendWork(workRecord{
 					a: a.Add(c.off - off),
 					t: c.t,
 					r: c.r,
@@ -506,6 +592,7 @@ func (p *Process) typeHeap() {
 type reader interface {
 	ReadPtr(core.Address) core.Address
 	ReadInt(core.Address) int64
+	ReadUint8(core.Address) uint8
 }
 
 // A frameReader reads data out of a stack frame.
@@ -524,6 +611,9 @@ func (fr *frameReader) ReadPtr(a core.Address) core.Address {
 func (fr *frameReader) ReadInt(a core.Address) int64 {
 	return fr.p.proc.ReadInt(a)
 }
+func (fr *frameReader) ReadUint8(a core.Address) uint8 {
+	return fr.p.proc.ReadUint8(a)
+}
 
 // typeObject takes an address and a type for the data at that address.
 // For each pointer it finds in the memory at that address, it calls add with the pointer
@@ -537,6 +627,9 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 	case KindEface, KindIface:
 		// interface. Use the type word to determine the type
 		// of the pointed-to object.
+		if a == 0 {
+			return
+		}
 		typPtr := r.ReadPtr(a)
 		if typPtr == 0 { // nil interface
 			return
@@ -545,9 +638,22 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		if t.Kind == KindIface {
 			typPtr = p.proc.ReadPtr(typPtr.Add(p.findType("runtime.itab").field("_type").Off))
 		}
+		if typPtr == 0 { // nil interface
+			return
+		}
+		// hack for invalid typePtr
+		m := p.proc.FindMapping(typPtr)
+		if m == nil {
+			fmt.Printf("typPtr out of memory address: %v\n", typPtr)
+			return
+		}
+		if typPtr == 4294967295 { // hack 0xffffffff
+			return
+		}
 		// TODO: for KindEface, type typPtr. It might point to the heap
 		// if the type was allocated with reflect.
-		typ := p.runtimeType2Type(typPtr)
+		typ := p.runtimeType2Type(typPtr, a.Add(ptrSize))
+		// fmt.Printf("interface, addr: 0x%x, typPtr: 0x%x, type name: %v, typ kind: %v\n", a, typPtr, typ.Name, typ.Kind)
 		typr := region{p: p, a: typPtr, typ: p.findType("runtime._type")}
 		if typr.Field("kind").Uint8()&uint8(p.rtConstants["kindDirectIface"]) == 0 {
 			// Indirect interface: the interface introduced a new
@@ -555,6 +661,8 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			// Read through it.
 			add(r.ReadPtr(data), typ, 1)
 			return
+		} else {
+			// fmt.Printf("foo\n")
 		}
 
 		// Direct interface: the contained type is a single pointer.
@@ -562,6 +670,45 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		directTyp := typ
 	findDirect:
 		for {
+			if newTyp := ReFindType(directTyp, p); newTyp != directTyp {
+				directTyp = newTyp
+				data = r.ReadPtr(data)
+				break
+			}
+			/*
+				name := directTyp.Name
+				if newTypName, ok := SymbolNameMap[name]; ok {
+					directTyp = p.findType(newTypName)
+					if directTyp == nil {
+						panic(fmt.Sprintf("not found type: %v", newTypName))
+					}
+					data = r.ReadPtr(data)
+					break
+				}
+			*/
+			/*
+				if directTyp.Kind == KindStruct {
+					// FIXME: hack type
+					if directTyp.Name == "*http.connPool" {
+						directTyp = p.findType("gitlab.alipay-ant-http.connPool")
+						if directTyp == nil {
+							panic("not found type: gitlab.alipay-ant-http.connPool")
+						}
+						data = r.ReadPtr(data)
+						break
+					}
+
+					if directTyp.Name == "*stream.client" {
+						directTyp = p.findType("gitlab.alipay-ant-stream.client")
+						if directTyp == nil {
+							panic("not found type: gitlab.alipay-ant-stream.client")
+						}
+						data = r.ReadPtr(data)
+						break
+					}
+				}
+			*/
+
 			if directTyp.Kind == KindArray {
 				directTyp = typ.Elem
 				continue findDirect
@@ -579,6 +726,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			}
 			break
 		}
+		// fmt.Printf("interface, addr: 0x%x, typPtr: 0x%x, type name: %v, directTyp name: %v\n", a, typPtr, typ.Name, directTyp.Name)
 		add(data, directTyp, 1)
 	case KindString:
 		ptr := r.ReadPtr(a)
@@ -589,8 +737,17 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		cap := r.ReadInt(a.Add(2 * ptrSize))
 		add(ptr, t.Elem, cap)
 	case KindPtr:
+		addr := fmt.Sprintf("0x%x", r.ReadPtr(a))
+		if addr == "0xc0000100f0" {
+			fmt.Printf("hit")
+		}
 		if t.Elem != nil { // unsafe.Pointer has a nil Elem field.
 			add(r.ReadPtr(a), t.Elem, 1)
+		} else {
+			if addr == "0xc008c2a068" {
+				fmt.Printf("bar\n")
+			}
+			// fmt.Printf("unsafe.Pointer: 0x%x, address: 0x%x\n", a, r.ReadPtr(a))
 		}
 	case KindFunc:
 		// The referent is a closure. We don't know much about the
@@ -641,7 +798,46 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		}
 		// TODO: also special case for channels?
 		for _, f := range t.Fields {
-			p.typeObject(a.Add(f.Off), f.Type, r, add)
+			if t.Name == "sync.entry" && f.Name == "p" && f.Type.Name == "unsafe.Pointer" {
+				// f.Type.Name = "unsafe.Pointer<interface{}>"
+				iface := &Type{
+					Name: "sync.entry<interface{}>",
+					Kind: KindEface,
+				}
+				// fmt.Printf("sync.entry, addr: 0x%x, ptr: 0x%x\n", a.Add(f.Off), r.ReadPtr(a.Add(f.Off)))
+				p.typeObject(r.ReadPtr(a.Add(f.Off)), iface, r, add)
+
+			} else if t.Name == "sync.Pool" && f.Name == "local" && f.Type.Name == "unsafe.Pointer" {
+				// TODO: also handle victim
+				var size uint64
+				for _, f := range t.Fields {
+					if f.Name == "localSize" {
+						size = p.proc.ReadUint64(a.Add(f.Off))
+					}
+					// fmt.Printf("field: %v, a: %v, f.Off: %v, size: %v\n", f.Name, a, f.Off, size)
+				}
+				// fmt.Printf("Pool.local, t.name: %v\n", t.Name)
+				// fmt.Printf("Array count: %v\n", array.Count)
+				typ := p.findType("sync.poolLocal")
+				// fmt.Printf("sync.poolLocal type, name: %v, kind: %v, size: %v, count: %v\n", typ.Name, typ.Kind, typ.Size, typ.Count)
+
+				array := &Type{
+					Name:  "[P]poolLocal",
+					Kind:  KindArray,
+					Count: int64(size),
+					Size:  int64(size) * typ.Size,
+					Elem:  typ,
+				}
+				ptr := &Type{
+					Name: "*[P]poolLocal",
+					Kind: KindPtr,
+					Elem: array,
+				}
+				p.typeObject(a.Add(f.Off), ptr, r, add)
+
+			} else {
+				p.typeObject(a.Add(f.Off), f.Type, r, add)
+			}
 		}
 	default:
 		panic(fmt.Sprintf("unknown type kind %s\n", t.Kind))

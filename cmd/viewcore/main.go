@@ -16,6 +16,8 @@ package main
 import (
 	"fmt"
 	"io"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"runtime/debug"
 	"runtime/pprof"
@@ -24,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"text/tabwriter"
+	"unicode"
 
 	"github.com/chzyer/readline"
 	"github.com/spf13/cobra"
@@ -118,6 +121,27 @@ var (
 		Run:   runObjgraph,
 	}
 
+	cmdObjref = &cobra.Command{
+		Use:   "objref <output_filename>",
+		Short: "dump object reference",
+		Args:  cobra.ExactArgs(1),
+		Run:   runObjref,
+	}
+
+	cmdReadObj = &cobra.Command{
+		Use:   "readobj <address>",
+		Short: "read a gc object from address",
+		Args:  cobra.ExactArgs(1),
+		Run:   runReadObj,
+	}
+
+	cmdReadEface = &cobra.Command{
+		Use:   "readEface <address>",
+		Short: "read a map from address",
+		Args:  cobra.ExactArgs(1),
+		Run:   runReadEface,
+	}
+
 	cmdReachable = &cobra.Command{
 		Use:   "reachable <address>",
 		Short: "find path from root to an object",
@@ -138,6 +162,11 @@ var (
 		Args:  cobra.RangeArgs(1, 2),
 		Run:   runRead,
 	}
+
+	visitedNodes   = make(map[core.Address]*GCNode)
+	allGCNodes     = make(map[core.Address]*GCNode)
+	rootGCNodesMap = make(map[core.Address]*GCNode)
+	rootGCNodes    = []*GCNode{}
 )
 
 type config struct {
@@ -172,6 +201,9 @@ func init() {
 		cmdBreakdown,
 		cmdObjects,
 		cmdObjgraph,
+		cmdObjref,
+		cmdReadObj,
+		cmdReadEface,
 		cmdReachable,
 		cmdHTML,
 		cmdRead)
@@ -522,7 +554,399 @@ func runBreakdown(cmd *cobra.Command, args []string) {
 	}
 	printStat(c.Stats(), "")
 	t.Flush()
+}
 
+type GCRef struct {
+	link string
+	node *GCNode
+}
+
+type GCNode struct {
+	addr core.Address
+	name string
+	size int64
+	refs []*GCRef
+}
+
+func addUniqueChildNodes(nodes []*GCNode) {
+	// width first visit
+	cnodes := []*GCNode{}
+
+	for _, node := range nodes {
+		if _, ok := visitedNodes[node.addr]; !ok {
+			panic("add children for not visited node")
+			return
+		}
+
+		refs := allGCNodes[node.addr].refs // all refered child nodes
+		for _, ref := range refs {
+			if _, ok := visitedNodes[ref.node.addr]; ok {
+				continue
+			}
+			newNode := nodeCopy(ref.node)
+			newRef := &GCRef{
+				node: newNode,
+				link: ref.link,
+			}
+
+			node.refs = append(node.refs, newRef)
+			visitedNodes[newNode.addr] = newNode
+
+			cnodes = append(cnodes, newNode)
+		}
+	}
+	if len(cnodes) > 0 {
+		addUniqueChildNodes(cnodes)
+	}
+}
+
+func (node *GCNode) appendChild(cNode *GCNode, link string) {
+	ref := &GCRef{
+		link: link,
+		node: cNode,
+	}
+	node.refs = append(node.refs, ref)
+}
+
+func findOrCreateGCNode(name string, addr core.Address, size int64) *GCNode {
+	if node, ok := allGCNodes[addr]; ok {
+		if node.size != size {
+			fmt.Fprintf(os.Stderr, "same address: %v, old size: %v, new size: %v\n", addr, node.size, size)
+		}
+		if node.name != name && strings.HasPrefix(node.name, "unk") && !strings.HasPrefix(name, "unk") {
+			node.name = name
+		}
+		return node
+	}
+	node := &GCNode{
+		name: name,
+		addr: addr,
+		size: size,
+	}
+	allGCNodes[addr] = node
+	return node
+}
+
+func checkGCNodeCreated(name string, addr core.Address, size int64) *GCNode {
+	if _, ok := allGCNodes[addr]; !ok {
+		// TODO
+		// fmt.Fprintf(os.Stderr, "uncreated gc node, address: %v, name: %v, size: %v\n", addr, name, size)
+	}
+	return findOrCreateGCNode(name, addr, size)
+}
+
+func calcTreeSize(node *GCNode) int64 {
+	// fmt.Printf("node: %x\n", node.addr)
+	size := int64(0)
+	for _, ref := range node.refs {
+		size += calcTreeSize(ref.node)
+	}
+	node.size = size + node.size
+	return node.size
+}
+
+func nodeCopy(node *GCNode) *GCNode {
+	newNode := *node
+	newNode.refs = []*GCRef{}
+	return &newNode
+}
+
+func addGCRoot(node *GCNode, delay bool) {
+	if n, ok := rootGCNodesMap[node.addr]; ok {
+		// there may have empty slices
+		if node.size == n.size && n.size == 0 {
+			return
+		}
+		err := fmt.Sprintf("duplicated GC root node: %v, existing: %v", node, n)
+		panic(err)
+	}
+
+	n := nodeCopy(node)
+	if !delay {
+		rootGCNodes = append(rootGCNodes, n)
+		rootGCNodesMap[node.addr] = node
+	}
+
+	// mark visited for root node
+	visitedNodes[n.addr] = n
+}
+
+func findObject(addr core.Address, c *gocore.Process) gocore.Object {
+	var target gocore.Object
+	c.ForEachObject(func(x gocore.Object) bool {
+		if c.Addr(x) == addr {
+			target = x
+			return false
+		}
+		return true
+	})
+	return target
+}
+
+func runReadEface(cmd *cobra.Command, args []string) {
+	p, c, err := readCore()
+	if err != nil {
+		exitf("%v\n", err)
+	}
+	arg, err := strconv.ParseInt(args[0], 16, 64)
+	if err != nil {
+		exitf("invalid address %v, err: %v\n", args[0], err)
+	}
+	addr := core.Address(uint64(arg))
+	target := findObject(addr, c)
+	if target == 0 {
+		fmt.Println("not found")
+		return
+	}
+	fmt.Printf("found target Eface: 0x%x, type: %v, size: %v\n", c.Addr(target), typeName(c, target), c.Size(target))
+	typ, repeat := c.Type(target)
+	if typ != nil {
+		fmt.Printf("type, name: %v, repeat: %v\n", typ.Name, repeat)
+	} else {
+		fmt.Printf("no type found\n")
+	}
+	gocore.ReadEface(c.Addr(target), typ, p, c, 1)
+}
+
+func runReadObj(cmd *cobra.Command, args []string) {
+	go func() {
+		http.ListenAndServe(":6060", nil)
+	}()
+	p, c, err := readCore()
+	if err != nil {
+		exitf("%v\n", err)
+	}
+	arg, err := strconv.ParseInt(args[0], 16, 64)
+	if err != nil {
+		exitf("invalid address %v, err: %v\n", args[0], err)
+	}
+	addr := core.Address(uint64(arg))
+	var target gocore.Object
+	c.ForEachObject(func(x gocore.Object) bool {
+		if c.Addr(x) == addr {
+			target = x
+			return false
+		}
+		return true
+	})
+	if target == 0 {
+		fmt.Println("not found")
+		return
+	}
+
+	typ, repeat := c.Type(target)
+	fmt.Printf("found target: 0x%x, repeat: %v, size: %v\n", c.Addr(target), repeat, c.Size(target))
+
+	if typ == nil {
+		fmt.Printf("not found type\n")
+		gocore.ReadEface(addr, typ, p, c, 1)
+	} else {
+		fmt.Printf("type, name: %v, kind: %v\n", typ.Name, typ.Kind)
+		gocore.ReadObj(addr, typ, p, c, 1)
+	}
+
+	/*
+		if !strings.HasPrefix(typ.Name, "hash<") {
+			fmt.Printf("not hash type")
+			return
+		}
+
+		var bPtr core.Address
+		var bTyp *gocore.Type
+		var n int64
+		for _, f := range typ.Fields {
+			if f.Name == "buckets" {
+				bPtr = p.ReadPtr(addr.Add(f.Off))
+				bTyp = f.Type.Elem
+			}
+			if f.Name == "B" {
+				n = int64(1) << p.ReadUint8(addr.Add(f.Off))
+			}
+		}
+		fmt.Printf("buckets, addr: 0x%x, type name: %v, kind: %v, num: %v\n", bPtr, bTyp.Name, bTyp.Kind, n)
+
+		var keyPtr, valuePtr core.Address
+		var keyTyp, valueTyp *gocore.Type
+		for _, f := range bTyp.Fields {
+			if f.Name == "keys" {
+				keyPtr = bPtr.Add(f.Off)
+				keyTyp = f.Type
+			}
+			if f.Name == "values" {
+				valuePtr = bPtr.Add(f.Off)
+				valueTyp = f.Type
+			}
+		}
+		for j := int64(0); j < n; j++ {
+			nKeyPtr := keyPtr.Add(bTyp.Size * j)
+			nValuePtr := valuePtr.Add(bTyp.Size * j)
+
+			fmt.Printf("n: %d, keys, addr: 0x%x, type name: %v, kind: %v, num: %v\n", j+1, nKeyPtr, keyTyp.Name, keyTyp.Kind, keyTyp.Count)
+			fmt.Printf("n: %d, values, addr: 0x%x, type name: %v, kind: %v, num: %v\n", j+1, nValuePtr, valueTyp.Name, valueTyp.Kind, valueTyp.Count)
+
+			for i := int64(0); i < keyTyp.Count; i++ {
+				fmt.Printf("key %v:", j*8+i+1)
+				gocore.ReadEface(nKeyPtr.Add(keyTyp.Elem.Size*i), keyTyp.Elem, p, c)
+			}
+		}
+	*/
+}
+
+func runObjref(cmd *cobra.Command, args []string) {
+	_, c, err := readCore()
+	if err != nil {
+		exitf("%v\n", err)
+	}
+	/*
+		for _, r := range c.Globals() {
+			size := c.Size(gocore.Object(r.Addr))
+			fmt.Println("global addr: ", r.Addr, ", ", r.Name, ", ", size)
+		}
+	*/
+
+	sumObjSize := int64(0)
+	c.ForEachObject(func(x gocore.Object) bool {
+		sumObjSize += c.Size(x)
+		xNode := findOrCreateGCNode(typeName(c, x), c.Addr(x), c.Size(x))
+		c.ForEachPtr(x, func(i int64, y gocore.Object, j int64) bool {
+			yNode := findOrCreateGCNode(typeName(c, y), c.Addr(y), c.Size(y))
+			xNode.appendChild(yNode, fieldName(c, x, i))
+			return true
+		})
+		return true
+	})
+	fmt.Fprintf(os.Stderr, "sum object size %v\n", sumObjSize)
+
+	// just check all root gc nodes and their children nodes have been created
+	for _, r := range c.Globals() {
+		size := c.Size(gocore.Object(r.Addr))
+		rNode := checkGCNodeCreated(r.Name, r.Addr, size)
+		addGCRoot(rNode, false)
+
+		c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
+			cNode := checkGCNodeCreated(typeName(c, y), c.Addr(y), c.Size(y))
+			rNode.appendChild(cNode, typeFieldName(r.Type, i))
+			return true
+		})
+	}
+	for _, g := range c.Goroutines() {
+		gName := fmt.Sprintf("go%x", g.Addr())
+		gNode := checkGCNodeCreated(gName, g.Addr(), c.Size(gocore.Object(g.Addr())))
+		addGCRoot(gNode, true)
+
+		for fi, f := range g.Frames() {
+			fNode := findOrCreateGCNode(f.Func().Name(), f.Max(), 0)
+			gNode.appendChild(fNode, fmt.Sprintf("frame-%d", fi))
+			for ri, r := range f.Roots() {
+				rNode := checkGCNodeCreated(r.Name, r.Addr, c.Size(gocore.Object(r.Addr)))
+				// really useful?
+				fNode.appendChild(rNode, fmt.Sprintf("local-var-%d", ri))
+
+				c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
+					cNode := checkGCNodeCreated(typeName(c, y), c.Addr(y), c.Size(y))
+					rNode.appendChild(cNode, typeFieldName(r.Type, i))
+					return true
+				})
+			}
+		}
+	}
+
+	// unique ref: only need one ref for one gc obj
+	// order: globals first
+	addUniqueChildNodes(rootGCNodes)
+	for _, g := range c.Goroutines() {
+		gName := fmt.Sprintf("go%x", g.Addr())
+		gNode := checkGCNodeCreated(gName, g.Addr(), c.Size(gocore.Object(g.Addr())))
+		addGCRoot(gNode, false)
+	}
+	// next, goroutines
+	addUniqueChildNodes(rootGCNodes)
+
+	allObjSize := int64(0)
+	for _, node := range allGCNodes {
+		allObjSize += node.size
+	}
+	fmt.Fprintf(os.Stderr, "all object size %v\n", allObjSize)
+
+	total := int64(0)
+	for _, rNode := range rootGCNodes {
+		total += calcTreeSize(rNode)
+	}
+	fmt.Fprintf(os.Stderr, "total size %v\n", total)
+
+	fname := args[0]
+	// Dump object graph to output file.
+	w, err := os.Create(fname)
+	if err != nil {
+		panic(err)
+	}
+	debug := false
+	if debug {
+		for _, node := range allGCNodes {
+			var childs []string
+			for _, ref := range node.refs {
+				childs = append(childs, fmt.Sprintf("0x%x", ref.node.addr))
+			}
+			fmt.Fprintf(w, "0x%x(%v): %s\n", node.addr, node.size, strings.Join(childs, ", "))
+		}
+	} else {
+		var path []string
+
+		printedSize := int64(0)
+		for _, rNode := range rootGCNodes {
+			printedSize += printRefPath(w, path, total, rNode)
+		}
+		fmt.Fprintf(os.Stderr, "printed size: %v\n", printedSize)
+	}
+	w.Close()
+	fmt.Fprintf(os.Stderr, "wrote the object reference to %q\n", fname)
+}
+
+func genRefPath(slice []string) string {
+	// 1. reverse order.
+	var reverse = make([]string, len(slice))
+
+	for index, value := range slice {
+		// 2. remove unprintable
+		newValue := strings.Map(func(r rune) rune {
+			if r == '+' || r == '?' {
+				return '.'
+			}
+			if unicode.IsPrint(r) {
+				return r
+			}
+			return -1
+		}, value)
+		reverse[len(reverse)-1-index] = newValue
+	}
+
+	return strings.Join(reverse, "\n")
+}
+
+var minPrintRatio = float64(0.0001)
+
+// return the printed size
+func printRefPath(w *os.File, path []string, total int64, node *GCNode) int64 {
+	if float64(node.size)/float64(total) < minPrintRatio {
+		return 0
+	}
+	printedSize := int64(0)
+	path = append(path, fmt.Sprintf("%v 0x%x", node.name, node.addr))
+	for _, ref := range node.refs {
+		rPath := path
+		if ref.link != "" {
+			rPath = append(rPath, ref.link)
+		}
+		printedSize += printRefPath(w, rPath, total, ref.node)
+	}
+	if float64(node.size-printedSize)/float64(total) < minPrintRatio {
+		return printedSize
+	}
+	// fmt.Printf("%v\n\t%d\n", strings.Join(path, "\n"), node.size)
+	ref := genRefPath(path)
+	fmt.Fprintf(w, "%v\n\t%d\n", ref, node.size-printedSize)
+
+	return node.size
 }
 
 func runObjgraph(cmd *cobra.Command, args []string) {
@@ -756,7 +1180,7 @@ func typeName(c *gocore.Process, x gocore.Object) string {
 	size := c.Size(x)
 	typ, repeat := c.Type(x)
 	if typ == nil {
-		return fmt.Sprintf("unk%d", size)
+		return fmt.Sprintf("unk#0x%x", x)
 	}
 	name := typ.String()
 	n := size / typ.Size
@@ -767,7 +1191,7 @@ func typeName(c *gocore.Process, x gocore.Object) string {
 			name = fmt.Sprintf("[%d]%s", repeat, name)
 		}
 	}
-	return name
+	return name + fmt.Sprintf(" 0x%x", x)
 }
 
 // fieldName returns the name of the field at offset off in x.
