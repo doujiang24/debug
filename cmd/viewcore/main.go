@@ -118,6 +118,13 @@ var (
 		Run:   runObjgraph,
 	}
 
+	cmdObjref = &cobra.Command{
+		Use:   "objref <output_filename>",
+		Short: "dump object reference",
+		Args:  cobra.ExactArgs(1),
+		Run:   runObjref,
+	}
+
 	cmdReachable = &cobra.Command{
 		Use:   "reachable <address>",
 		Short: "find path from root to an object",
@@ -172,6 +179,7 @@ func init() {
 		cmdBreakdown,
 		cmdObjects,
 		cmdObjgraph,
+		cmdObjref,
 		cmdReachable,
 		cmdHTML,
 		cmdRead)
@@ -523,6 +531,23 @@ func runBreakdown(cmd *cobra.Command, args []string) {
 	printStat(c.Stats(), "")
 	t.Flush()
 
+}
+func runObjref(cmd *cobra.Command, args []string) {
+	_, _, err := readCore()
+	if err != nil {
+		exitf("%v\n", err)
+	}
+
+	fname := args[0]
+
+	// Dump object graph to output file.
+	w, err := os.Create(fname)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Fprintf(w, "foo\n1\n")
+	w.Close()
+	fmt.Fprintf(os.Stderr, "wrote the object reference to %q\n", fname)
 }
 
 func runObjgraph(cmd *cobra.Command, args []string) {
