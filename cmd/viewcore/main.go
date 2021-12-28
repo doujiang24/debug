@@ -145,6 +145,8 @@ var (
 		Args:  cobra.RangeArgs(1, 2),
 		Run:   runRead,
 	}
+
+	visitedChildren = make(map[core.Address]*GCNode)
 )
 
 type config struct {
@@ -530,10 +532,35 @@ func runBreakdown(cmd *cobra.Command, args []string) {
 	}
 	printStat(c.Stats(), "")
 	t.Flush()
-
 }
+
+type GCRef struct {
+	link string
+	node *GCNode
+}
+
+type GCNode struct {
+	obj  core.Address
+	name string
+	size int64
+	refs []*GCRef
+}
+
+func (node *GCNode) appendChild(cNode *GCNode, link string) {
+	if _, ok := visitedChildren[cNode.obj]; ok {
+		// panic("append already visited node")
+		return
+	}
+	ref := &GCRef{
+		link: link,
+		node: cNode,
+	}
+	visitedChildren[ref.node.obj] = ref.node
+	node.refs = append(node.refs, ref)
+}
+
 func runObjref(cmd *cobra.Command, args []string) {
-	_, _, err := readCore()
+	_, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
@@ -545,7 +572,79 @@ func runObjref(cmd *cobra.Command, args []string) {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Fprintf(w, "foo\n1\n")
+
+	var rootNodes []*GCNode
+
+	for _, r := range c.Globals() {
+		rNode := &GCNode{
+			name: r.Name,
+			obj:  r.Addr,
+			size: c.Size(gocore.Object(r.Addr)),
+		}
+		rootNodes = append(rootNodes, rNode)
+
+		c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
+			cNode := &GCNode{
+				name: typeName(c, y),
+				obj:  c.Addr(y),
+				size: c.Size(y),
+			}
+			rNode.appendChild(cNode, typeFieldName(r.Type, i))
+			return true
+		})
+	}
+	for _, g := range c.Goroutines() {
+		gNode := &GCNode{
+			name: fmt.Sprintf("go%x", g.Addr()),
+			obj:  g.Addr(),
+			size: c.Size(gocore.Object(g.Addr())),
+		}
+		rootNodes = append(rootNodes, gNode)
+
+		for fi, f := range g.Frames() {
+			fNode := &GCNode{
+				obj:  f.Max(),
+				name: f.Func().Name(),
+				size: 0,
+			}
+			gNode.appendChild(fNode, fmt.Sprintf("frame-%d", fi))
+			for ri, r := range f.Roots() {
+				rNode := &GCNode{
+					name: r.Name,
+					obj:  r.Addr,
+					size: c.Size(gocore.Object(r.Addr)),
+				}
+				fNode.appendChild(rNode, fmt.Sprintf("local-var-%d", ri))
+
+				c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
+					cNode := &GCNode{
+						name: typeName(c, y),
+						obj:  c.Addr(y),
+						size: c.Size(y),
+					}
+					rNode.appendChild(cNode, typeFieldName(r.Type, i))
+					return true
+				})
+			}
+		}
+	}
+	c.ForEachObject(func(x gocore.Object) bool {
+		xNode := &GCNode{
+			name: typeName(c, x),
+			obj:  c.Addr(x),
+			size: c.Size(x),
+		}
+		c.ForEachPtr(x, func(i int64, y gocore.Object, j int64) bool {
+			yNode := &GCNode{
+				name: typeName(c, y),
+				obj:  c.Addr(y),
+				size: c.Size(y),
+			}
+			xNode.appendChild(yNode, fieldName(c, x, i))
+			return true
+		})
+		return true
+	})
 	w.Close()
 	fmt.Fprintf(os.Stderr, "wrote the object reference to %q\n", fname)
 }
