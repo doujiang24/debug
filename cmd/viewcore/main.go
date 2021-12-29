@@ -147,6 +147,7 @@ var (
 	}
 
 	visitedChildren = make(map[core.Address]*GCNode)
+	allGCNodes      = make(map[core.Address]*GCNode)
 )
 
 type config struct {
@@ -540,14 +541,14 @@ type GCRef struct {
 }
 
 type GCNode struct {
-	obj  core.Address
+	addr core.Address
 	name string
 	size int64
 	refs []*GCRef
 }
 
 func (node *GCNode) appendChild(cNode *GCNode, link string) {
-	if _, ok := visitedChildren[cNode.obj]; ok {
+	if _, ok := visitedChildren[cNode.addr]; ok {
 		// panic("append already visited node")
 		return
 	}
@@ -555,8 +556,30 @@ func (node *GCNode) appendChild(cNode *GCNode, link string) {
 		link: link,
 		node: cNode,
 	}
-	visitedChildren[ref.node.obj] = ref.node
+	visitedChildren[ref.node.addr] = ref.node
 	node.refs = append(node.refs, ref)
+}
+
+func findOrCreateGCNode(name string, addr core.Address, size int64) *GCNode {
+	if node, ok := allGCNodes[addr]; ok {
+		return node
+	}
+	node := &GCNode{
+		name: name,
+		addr: addr,
+		size: size,
+	}
+	allGCNodes[addr] = node
+	return node
+}
+
+func calcTreeSize(node *GCNode) int64 {
+	size := int64(0)
+	for _, ref := range node.refs {
+		size += calcTreeSize(ref.node)
+	}
+	node.size = size + node.size
+	return node.size
 }
 
 func runObjref(cmd *cobra.Command, args []string) {
@@ -565,63 +588,31 @@ func runObjref(cmd *cobra.Command, args []string) {
 		exitf("%v\n", err)
 	}
 
-	fname := args[0]
-
-	// Dump object graph to output file.
-	w, err := os.Create(fname)
-	if err != nil {
-		panic(err)
-	}
-
 	var rootNodes []*GCNode
-
 	for _, r := range c.Globals() {
-		rNode := &GCNode{
-			name: r.Name,
-			obj:  r.Addr,
-			size: c.Size(gocore.Object(r.Addr)),
-		}
+		rNode := findOrCreateGCNode(r.Name, r.Addr, c.Size(gocore.Object(r.Addr)))
 		rootNodes = append(rootNodes, rNode)
 
 		c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
-			cNode := &GCNode{
-				name: typeName(c, y),
-				obj:  c.Addr(y),
-				size: c.Size(y),
-			}
+			cNode := findOrCreateGCNode(typeName(c, y), c.Addr(y), c.Size(y))
 			rNode.appendChild(cNode, typeFieldName(r.Type, i))
 			return true
 		})
 	}
 	for _, g := range c.Goroutines() {
-		gNode := &GCNode{
-			name: fmt.Sprintf("go%x", g.Addr()),
-			obj:  g.Addr(),
-			size: c.Size(gocore.Object(g.Addr())),
-		}
+		gName := fmt.Sprintf("go%x", g.Addr())
+		gNode := findOrCreateGCNode(gName, g.Addr(), c.Size(gocore.Object(g.Addr())))
 		rootNodes = append(rootNodes, gNode)
 
 		for fi, f := range g.Frames() {
-			fNode := &GCNode{
-				obj:  f.Max(),
-				name: f.Func().Name(),
-				size: 0,
-			}
+			fNode := findOrCreateGCNode(f.Func().Name(), f.Max(), 0)
 			gNode.appendChild(fNode, fmt.Sprintf("frame-%d", fi))
 			for ri, r := range f.Roots() {
-				rNode := &GCNode{
-					name: r.Name,
-					obj:  r.Addr,
-					size: c.Size(gocore.Object(r.Addr)),
-				}
+				rNode := findOrCreateGCNode(r.Name, r.Addr, c.Size(gocore.Object(r.Addr)))
 				fNode.appendChild(rNode, fmt.Sprintf("local-var-%d", ri))
 
 				c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
-					cNode := &GCNode{
-						name: typeName(c, y),
-						obj:  c.Addr(y),
-						size: c.Size(y),
-					}
+					cNode := findOrCreateGCNode(typeName(c, y), c.Addr(y), c.Size(y))
 					rNode.appendChild(cNode, typeFieldName(r.Type, i))
 					return true
 				})
@@ -629,24 +620,50 @@ func runObjref(cmd *cobra.Command, args []string) {
 		}
 	}
 	c.ForEachObject(func(x gocore.Object) bool {
-		xNode := &GCNode{
-			name: typeName(c, x),
-			obj:  c.Addr(x),
-			size: c.Size(x),
-		}
+		xNode := findOrCreateGCNode(typeName(c, x), c.Addr(x), c.Size(x))
 		c.ForEachPtr(x, func(i int64, y gocore.Object, j int64) bool {
-			yNode := &GCNode{
-				name: typeName(c, y),
-				obj:  c.Addr(y),
-				size: c.Size(y),
-			}
+			yNode := findOrCreateGCNode(typeName(c, y), c.Addr(y), c.Size(y))
 			xNode.appendChild(yNode, fieldName(c, x, i))
 			return true
 		})
 		return true
 	})
+
+	total := int64(0)
+	for _, rNode := range rootNodes {
+		total += calcTreeSize(rNode)
+	}
+
+	fname := args[0]
+	// Dump object graph to output file.
+	w, err := os.Create(fname)
+	if err != nil {
+		panic(err)
+	}
+	var path []string
+	for _, rNode := range rootNodes {
+		printRefPath(w, path, total, rNode)
+	}
 	w.Close()
 	fmt.Fprintf(os.Stderr, "wrote the object reference to %q\n", fname)
+}
+
+func printRefPath(w *os.File, path []string, total int64, node *GCNode) bool {
+	if float64(node.size/total) < 0.001 {
+		return false
+	}
+	printed := false
+	path = append(path, node.name)
+	for _, ref := range node.refs {
+		rPath := append(path, ref.link)
+		if printRefPath(w, rPath, total, ref.node) {
+			printed = true
+		}
+	}
+	if !printed {
+		fmt.Fprintf(w, "%v\n\t%d\n", strings.Join(path, "\n"), node.size)
+	}
+	return true
 }
 
 func runObjgraph(cmd *cobra.Command, args []string) {
