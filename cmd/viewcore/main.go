@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"text/tabwriter"
+	"unicode"
 
 	"github.com/chzyer/readline"
 	"github.com/spf13/cobra"
@@ -148,6 +149,7 @@ var (
 
 	visitedChildren = make(map[core.Address]*GCNode)
 	allGCNodes      = make(map[core.Address]*GCNode)
+	rootGCNodes     = make(map[core.Address]*GCNode)
 )
 
 type config struct {
@@ -552,11 +554,18 @@ func (node *GCNode) appendChild(cNode *GCNode, link string) {
 		// panic("append already visited node")
 		return
 	}
+	// can not ref back to root
+	if _, ok := rootGCNodes[cNode.addr]; ok {
+		return
+	}
+	if node.addr == cNode.addr {
+		return
+	}
 	ref := &GCRef{
 		link: link,
 		node: cNode,
 	}
-	visitedChildren[ref.node.addr] = ref.node
+	visitedChildren[cNode.addr] = ref.node
 	node.refs = append(node.refs, ref)
 }
 
@@ -574,6 +583,7 @@ func findOrCreateGCNode(name string, addr core.Address, size int64) *GCNode {
 }
 
 func calcTreeSize(node *GCNode) int64 {
+	// fmt.Printf("node: %x\n", node.addr)
 	size := int64(0)
 	for _, ref := range node.refs {
 		size += calcTreeSize(ref.node)
@@ -582,16 +592,34 @@ func calcTreeSize(node *GCNode) int64 {
 	return node.size
 }
 
+func addGCRoot(node *GCNode) {
+	if n, ok := rootGCNodes[node.addr]; ok {
+		// there may have empty slices
+		if node.size == n.size && n.size == 0 {
+			return
+		}
+		err := fmt.Sprintf("duplicated GC root node: %v, existing: %v", node, n)
+		panic(err)
+	}
+	rootGCNodes[node.addr] = node
+}
+
 func runObjref(cmd *cobra.Command, args []string) {
 	_, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
 	}
+	/*
+		for _, r := range c.Globals() {
+			size := c.Size(gocore.Object(r.Addr))
+			fmt.Println("global addr: ", r.Addr, ", ", r.Name, ", ", size)
+		}
+	*/
 
-	var rootNodes []*GCNode
 	for _, r := range c.Globals() {
-		rNode := findOrCreateGCNode(r.Name, r.Addr, c.Size(gocore.Object(r.Addr)))
-		rootNodes = append(rootNodes, rNode)
+		size := c.Size(gocore.Object(r.Addr))
+		rNode := findOrCreateGCNode(r.Name, r.Addr, size)
+		addGCRoot(rNode)
 
 		c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
 			cNode := findOrCreateGCNode(typeName(c, y), c.Addr(y), c.Size(y))
@@ -602,7 +630,7 @@ func runObjref(cmd *cobra.Command, args []string) {
 	for _, g := range c.Goroutines() {
 		gName := fmt.Sprintf("go%x", g.Addr())
 		gNode := findOrCreateGCNode(gName, g.Addr(), c.Size(gocore.Object(g.Addr())))
-		rootNodes = append(rootNodes, gNode)
+		addGCRoot(gNode)
 
 		for fi, f := range g.Frames() {
 			fNode := findOrCreateGCNode(f.Func().Name(), f.Max(), 0)
@@ -630,7 +658,7 @@ func runObjref(cmd *cobra.Command, args []string) {
 	})
 
 	total := int64(0)
-	for _, rNode := range rootNodes {
+	for _, rNode := range rootGCNodes {
 		total += calcTreeSize(rNode)
 	}
 
@@ -640,28 +668,62 @@ func runObjref(cmd *cobra.Command, args []string) {
 	if err != nil {
 		panic(err)
 	}
-	var path []string
-	for _, rNode := range rootNodes {
-		printRefPath(w, path, total, rNode)
+	debug := false
+	if debug {
+		for _, node := range allGCNodes {
+			var childs []string
+			for _, ref := range node.refs {
+				childs = append(childs, fmt.Sprintf("0x%x", ref.node.addr))
+			}
+			fmt.Fprintf(w, "0x%x(%v): %s\n", node.addr, node.size, strings.Join(childs, ", "))
+		}
+	} else {
+		var path []string
+		for _, rNode := range rootGCNodes {
+			printRefPath(w, path, total, rNode)
+		}
 	}
 	w.Close()
 	fmt.Fprintf(os.Stderr, "wrote the object reference to %q\n", fname)
 }
 
+func genRefPath(slice []string) string {
+	// 1. reverse order.
+	var reverse = make([]string, len(slice))
+
+	for index, value := range slice {
+		// 2. remove unprintable
+		newValue := strings.Map(func(r rune) rune {
+			if unicode.IsPrint(r) {
+				return r
+			}
+			return -1
+		}, value)
+		reverse[len(reverse)-1-index] = newValue
+	}
+
+	return strings.Join(reverse, "\n")
+}
+
 func printRefPath(w *os.File, path []string, total int64, node *GCNode) bool {
-	if float64(node.size/total) < 0.001 {
+	if float64(node.size)/float64(total) < 0.001 {
 		return false
 	}
 	printed := false
 	path = append(path, node.name)
 	for _, ref := range node.refs {
-		rPath := append(path, ref.link)
+		rPath := path
+		if ref.link != "" {
+			rPath = append(rPath, ref.link)
+		}
 		if printRefPath(w, rPath, total, ref.node) {
 			printed = true
 		}
 	}
 	if !printed {
-		fmt.Fprintf(w, "%v\n\t%d\n", strings.Join(path, "\n"), node.size)
+		// fmt.Printf("%v\n\t%d\n", strings.Join(path, "\n"), node.size)
+		ref := genRefPath(path)
+		fmt.Fprintf(w, "%v\n\t%d\n", ref, node.size)
 	}
 	return true
 }

@@ -232,8 +232,12 @@ func (p *Process) Addr(x Object) core.Address {
 }
 
 // Size returns the size of x in bytes.
+//go:noinline
 func (p *Process) Size(x Object) int64 {
-	return p.findHeapInfo(core.Address(x)).size
+	if heap := p.findHeapInfo(core.Address(x)); heap != nil {
+		return heap.size
+	}
+	return 0
 }
 
 // Type returns the type and repeat count for the object x.
