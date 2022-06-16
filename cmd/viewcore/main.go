@@ -696,9 +696,12 @@ func runObjref(cmd *cobra.Command, args []string) {
 		}
 	} else {
 		var path []string
+
+		printedSize := int64(0)
 		for _, rNode := range rootGCNodes {
-			printRefPath(w, path, total, rNode)
+			printedSize += printRefPath(w, path, total, rNode)
 		}
+		fmt.Fprintf(os.Stderr, "printed size: %v\n", printedSize)
 	}
 	w.Close()
 	fmt.Fprintf(os.Stderr, "wrote the object reference to %q\n", fname)
@@ -722,27 +725,30 @@ func genRefPath(slice []string) string {
 	return strings.Join(reverse, "\n")
 }
 
-func printRefPath(w *os.File, path []string, total int64, node *GCNode) bool {
-	if float64(node.size)/float64(total) < 0.001 {
-		return false
+var minPrintRatio = 0.0001
+
+// return the printed size
+func printRefPath(w *os.File, path []string, total int64, node *GCNode) int64 {
+	if float64(node.size)/float64(total) < minPrintRatio {
+		return 0
 	}
-	printed := false
+	printedSize := int64(0)
 	path = append(path, node.name)
 	for _, ref := range node.refs {
 		rPath := path
 		if ref.link != "" {
 			rPath = append(rPath, ref.link)
 		}
-		if printRefPath(w, rPath, total, ref.node) {
-			printed = true
-		}
+		printedSize += printRefPath(w, rPath, total, ref.node)
 	}
-	if !printed {
-		// fmt.Printf("%v\n\t%d\n", strings.Join(path, "\n"), node.size)
-		ref := genRefPath(path)
-		fmt.Fprintf(w, "%v\n\t%d\n", ref, node.size)
+	if float64(node.size-printedSize)/float64(total) < minPrintRatio {
+		return printedSize
 	}
-	return true
+	// fmt.Printf("%v\n\t%d\n", strings.Join(path, "\n"), node.size)
+	ref := genRefPath(path)
+	fmt.Fprintf(w, "%v\n\t%d\n", ref, node.size-printedSize)
+
+	return node.size
 }
 
 func runObjgraph(cmd *cobra.Command, args []string) {
