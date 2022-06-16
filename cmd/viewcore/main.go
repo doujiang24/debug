@@ -571,8 +571,11 @@ func (node *GCNode) appendChild(cNode *GCNode, link string) {
 
 func findOrCreateGCNode(name string, addr core.Address, size int64) *GCNode {
 	if node, ok := allGCNodes[addr]; ok {
-		if node.name != name || node.size != size {
-			fmt.Fprintf(os.Stderr, "same address: %v, old name: %v, new name: %v, old size: %v, new size: %v\n", addr, node.name, name, node.size, size)
+		if node.size != size {
+			fmt.Fprintf(os.Stderr, "same address: %v, old size: %v, new size: %v\n", addr, node.size, size)
+		}
+		if node.name != name && strings.HasPrefix(node.name, "unk") && !strings.HasPrefix(name, "unk") {
+			node.name = name
 		}
 		return node
 	}
