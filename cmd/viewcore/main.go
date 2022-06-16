@@ -571,6 +571,9 @@ func (node *GCNode) appendChild(cNode *GCNode, link string) {
 
 func findOrCreateGCNode(name string, addr core.Address, size int64) *GCNode {
 	if node, ok := allGCNodes[addr]; ok {
+		if node.name != name || node.size != size {
+			fmt.Fprintf(os.Stderr, "same address: %v, old name: %v, new name: %v, old size: %v, new size: %v\n", addr, node.name, name, node.size, size)
+		}
 		return node
 	}
 	node := &GCNode{
@@ -660,6 +663,12 @@ func runObjref(cmd *cobra.Command, args []string) {
 		return true
 	})
 	fmt.Fprintf(os.Stderr, "sum object size %v\n", sumObjSize)
+
+	allObjSize := int64(0)
+	for _, node := range allGCNodes {
+		allObjSize += node.size
+	}
+	fmt.Fprintf(os.Stderr, "all object size %v\n", allObjSize)
 
 	total := int64(0)
 	for _, rNode := range rootGCNodes {
