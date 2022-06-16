@@ -647,7 +647,10 @@ func runObjref(cmd *cobra.Command, args []string) {
 			}
 		}
 	}
+
+	sumObjSize := int64(0)
 	c.ForEachObject(func(x gocore.Object) bool {
+		sumObjSize += c.Size(x)
 		xNode := findOrCreateGCNode(typeName(c, x), c.Addr(x), c.Size(x))
 		c.ForEachPtr(x, func(i int64, y gocore.Object, j int64) bool {
 			yNode := findOrCreateGCNode(typeName(c, y), c.Addr(y), c.Size(y))
@@ -656,11 +659,13 @@ func runObjref(cmd *cobra.Command, args []string) {
 		})
 		return true
 	})
+	fmt.Fprintf(os.Stderr, "sum object size %v\n", sumObjSize)
 
 	total := int64(0)
 	for _, rNode := range rootGCNodes {
 		total += calcTreeSize(rNode)
 	}
+	fmt.Fprintf(os.Stderr, "total size %v\n", total)
 
 	fname := args[0]
 	// Dump object graph to output file.
