@@ -609,7 +609,8 @@ func findOrCreateGCNode(name string, addr core.Address, size int64) *GCNode {
 
 func checkGCNodeCreated(name string, addr core.Address, size int64) *GCNode {
 	if _, ok := allGCNodes[addr]; !ok {
-		fmt.Fprintf(os.Stderr, "uncreated gc node, address: %v, name: %v, size: %v\n", addr, name, size)
+		// TODO
+		// fmt.Fprintf(os.Stderr, "uncreated gc node, address: %v, name: %v, size: %v\n", addr, name, size)
 	}
 	return findOrCreateGCNode(name, addr, size)
 }
@@ -680,7 +681,8 @@ func runObjref(cmd *cobra.Command, args []string) {
 		addGCRoot(rNode)
 
 		c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
-			checkGCNodeCreated(typeName(c, y), c.Addr(y), c.Size(y))
+			cNode := checkGCNodeCreated(typeName(c, y), c.Addr(y), c.Size(y))
+			rNode.appendChild(cNode, typeFieldName(r.Type, i))
 			return true
 		})
 	}
@@ -689,18 +691,17 @@ func runObjref(cmd *cobra.Command, args []string) {
 		gNode := checkGCNodeCreated(gName, g.Addr(), c.Size(gocore.Object(g.Addr())))
 		addGCRoot(gNode)
 
-		for _, f := range g.Frames() {
-			/*
-				fNode := findOrCreateGCNode(f.Func().Name(), f.Max(), 0)
-				gNode.appendChild(fNode, fmt.Sprintf("frame-%d", fi))
-			*/
+		for fi, f := range g.Frames() {
+			fNode := findOrCreateGCNode(f.Func().Name(), f.Max(), 0)
+			gNode.appendChild(fNode, fmt.Sprintf("frame-%d", fi))
 			for ri, r := range f.Roots() {
 				rNode := checkGCNodeCreated(r.Name, r.Addr, c.Size(gocore.Object(r.Addr)))
 				// really useful?
-				gNode.appendChild(rNode, fmt.Sprintf("local-var-%d", ri))
+				fNode.appendChild(rNode, fmt.Sprintf("local-var-%d", ri))
 
 				c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
-					checkGCNodeCreated(typeName(c, y), c.Addr(y), c.Size(y))
+					cNode := checkGCNodeCreated(typeName(c, y), c.Addr(y), c.Size(y))
+					rNode.appendChild(cNode, typeFieldName(r.Type, i))
 					return true
 				})
 			}
