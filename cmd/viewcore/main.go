@@ -147,9 +147,10 @@ var (
 		Run:   runRead,
 	}
 
-	visitedChildren = make(map[core.Address]*GCNode)
-	allGCNodes      = make(map[core.Address]*GCNode)
-	rootGCNodes     = make(map[core.Address]*GCNode)
+	visitedNodes   = make(map[core.Address]*GCNode)
+	allGCNodes     = make(map[core.Address]*GCNode)
+	rootGCNodesMap = make(map[core.Address]*GCNode)
+	rootGCNodes    = []*GCNode{}
 )
 
 type config struct {
@@ -549,23 +550,41 @@ type GCNode struct {
 	refs []*GCRef
 }
 
+func addUniqueChildNodes(node *GCNode) {
+	if _, ok := visitedNodes[node.addr]; !ok {
+		panic("add children for not visited node")
+		return
+	}
+
+	// width first visit
+	cnodes := []*GCNode{}
+	refs := allGCNodes[node.addr].refs // all refered child nodes
+	for _, ref := range refs {
+		if _, ok := visitedNodes[ref.node.addr]; ok {
+			continue
+		}
+		newNode := nodeCopy(ref.node)
+		newRef := &GCRef{
+			node: newNode,
+			link: ref.link,
+		}
+
+		node.refs = append(node.refs, newRef)
+		visitedNodes[newNode.addr] = newNode
+
+		cnodes = append(cnodes, newNode)
+	}
+
+	for _, cnode := range cnodes {
+		addUniqueChildNodes(cnode)
+	}
+}
+
 func (node *GCNode) appendChild(cNode *GCNode, link string) {
-	if _, ok := visitedChildren[cNode.addr]; ok {
-		// panic("append already visited node")
-		return
-	}
-	// can not ref back to root
-	if _, ok := rootGCNodes[cNode.addr]; ok {
-		return
-	}
-	if node.addr == cNode.addr {
-		return
-	}
 	ref := &GCRef{
 		link: link,
 		node: cNode,
 	}
-	visitedChildren[cNode.addr] = ref.node
 	node.refs = append(node.refs, ref)
 }
 
@@ -588,6 +607,13 @@ func findOrCreateGCNode(name string, addr core.Address, size int64) *GCNode {
 	return node
 }
 
+func checkGCNodeCreated(name string, addr core.Address, size int64) *GCNode {
+	if _, ok := allGCNodes[addr]; !ok {
+		fmt.Fprintf(os.Stderr, "uncreated gc node, address: %v, name: %v, size: %v\n", addr, name, size)
+	}
+	return findOrCreateGCNode(name, addr, size)
+}
+
 func calcTreeSize(node *GCNode) int64 {
 	// fmt.Printf("node: %x\n", node.addr)
 	size := int64(0)
@@ -598,8 +624,14 @@ func calcTreeSize(node *GCNode) int64 {
 	return node.size
 }
 
+func nodeCopy(node *GCNode) *GCNode {
+	newNode := *node
+	newNode.refs = []*GCRef{}
+	return &newNode
+}
+
 func addGCRoot(node *GCNode) {
-	if n, ok := rootGCNodes[node.addr]; ok {
+	if n, ok := rootGCNodesMap[node.addr]; ok {
 		// there may have empty slices
 		if node.size == n.size && n.size == 0 {
 			return
@@ -607,7 +639,13 @@ func addGCRoot(node *GCNode) {
 		err := fmt.Sprintf("duplicated GC root node: %v, existing: %v", node, n)
 		panic(err)
 	}
-	rootGCNodes[node.addr] = node
+	rootGCNodesMap[node.addr] = node
+
+	n := nodeCopy(node)
+	rootGCNodes = append(rootGCNodes, n)
+
+	// mark visited for root node
+	visitedNodes[n.addr] = n
 }
 
 func runObjref(cmd *cobra.Command, args []string) {
@@ -622,38 +660,6 @@ func runObjref(cmd *cobra.Command, args []string) {
 		}
 	*/
 
-	for _, r := range c.Globals() {
-		size := c.Size(gocore.Object(r.Addr))
-		rNode := findOrCreateGCNode(r.Name, r.Addr, size)
-		addGCRoot(rNode)
-
-		c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
-			cNode := findOrCreateGCNode(typeName(c, y), c.Addr(y), c.Size(y))
-			rNode.appendChild(cNode, typeFieldName(r.Type, i))
-			return true
-		})
-	}
-	for _, g := range c.Goroutines() {
-		gName := fmt.Sprintf("go%x", g.Addr())
-		gNode := findOrCreateGCNode(gName, g.Addr(), c.Size(gocore.Object(g.Addr())))
-		addGCRoot(gNode)
-
-		for fi, f := range g.Frames() {
-			fNode := findOrCreateGCNode(f.Func().Name(), f.Max(), 0)
-			gNode.appendChild(fNode, fmt.Sprintf("frame-%d", fi))
-			for ri, r := range f.Roots() {
-				rNode := findOrCreateGCNode(r.Name, r.Addr, c.Size(gocore.Object(r.Addr)))
-				fNode.appendChild(rNode, fmt.Sprintf("local-var-%d", ri))
-
-				c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
-					cNode := findOrCreateGCNode(typeName(c, y), c.Addr(y), c.Size(y))
-					rNode.appendChild(cNode, typeFieldName(r.Type, i))
-					return true
-				})
-			}
-		}
-	}
-
 	sumObjSize := int64(0)
 	c.ForEachObject(func(x gocore.Object) bool {
 		sumObjSize += c.Size(x)
@@ -666,6 +672,46 @@ func runObjref(cmd *cobra.Command, args []string) {
 		return true
 	})
 	fmt.Fprintf(os.Stderr, "sum object size %v\n", sumObjSize)
+
+	// just check all root gc nodes and their children nodes have been created
+	for _, r := range c.Globals() {
+		size := c.Size(gocore.Object(r.Addr))
+		rNode := checkGCNodeCreated(r.Name, r.Addr, size)
+		addGCRoot(rNode)
+
+		c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
+			checkGCNodeCreated(typeName(c, y), c.Addr(y), c.Size(y))
+			return true
+		})
+	}
+	for _, g := range c.Goroutines() {
+		gName := fmt.Sprintf("go%x", g.Addr())
+		gNode := checkGCNodeCreated(gName, g.Addr(), c.Size(gocore.Object(g.Addr())))
+		addGCRoot(gNode)
+
+		for _, f := range g.Frames() {
+			/*
+				fNode := findOrCreateGCNode(f.Func().Name(), f.Max(), 0)
+				gNode.appendChild(fNode, fmt.Sprintf("frame-%d", fi))
+			*/
+			for ri, r := range f.Roots() {
+				rNode := checkGCNodeCreated(r.Name, r.Addr, c.Size(gocore.Object(r.Addr)))
+				// really useful?
+				gNode.appendChild(rNode, fmt.Sprintf("local-var-%d", ri))
+
+				c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
+					checkGCNodeCreated(typeName(c, y), c.Addr(y), c.Size(y))
+					return true
+				})
+			}
+		}
+	}
+
+	// unique ref: only need one ref for one gc obj
+	// order: globals first, then goroutines
+	for _, rn := range rootGCNodes {
+		addUniqueChildNodes(rn)
+	}
 
 	allObjSize := int64(0)
 	for _, node := range allGCNodes {
