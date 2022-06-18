@@ -131,10 +131,10 @@ func (p *Process) markObjects() {
 // isPtrFromHeap reports whether the inferior at address a contains a pointer.
 // a must be somewhere in the heap.
 func (p *Process) isPtrFromHeap(a core.Address) bool {
-    h := p.findHeapInfo(a)
-    if h == nil {
-        return false
-    }
+	h := p.findHeapInfo(a)
+	if h == nil {
+		return false
+	}
 	return h.IsPtr(a, p.proc.PtrSize())
 }
 

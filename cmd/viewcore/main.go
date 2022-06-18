@@ -1029,7 +1029,7 @@ func typeName(c *gocore.Process, x gocore.Object) string {
 	size := c.Size(x)
 	typ, repeat := c.Type(x)
 	if typ == nil {
-		return fmt.Sprintf("unk%d", size)
+		return fmt.Sprintf("unk#0x%x", x)
 	}
 	name := typ.String()
 	n := size / typ.Size
@@ -1040,7 +1040,7 @@ func typeName(c *gocore.Process, x gocore.Object) string {
 			name = fmt.Sprintf("[%d]%s", repeat, name)
 		}
 	}
-	return name
+	return name + fmt.Sprintf("0x%x", x)
 }
 
 // fieldName returns the name of the field at offset off in x.

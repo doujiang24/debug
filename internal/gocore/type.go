@@ -351,6 +351,11 @@ func (p *Process) typeHeap() {
 		// add records the fact that we know the object at address a has
 		// r copies of type t.
 		add := func(a core.Address, t *Type, r int64) {
+			fmt.Printf("address: 0x%x, type: %v\n", a, t.Name)
+			addr := fmt.Sprintf("0x%x", a)
+			if addr == "0xc000096090" || addr == "0xc0000980d0" || addr == "0xc00000e010" {
+				fmt.Printf("foo\n")
+			}
 			if a == 0 { // nil pointer
 				return
 			}
@@ -555,6 +560,8 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			// Read through it.
 			add(r.ReadPtr(data), typ, 1)
 			return
+		} else {
+			fmt.Printf("foo")
 		}
 
 		// Direct interface: the contained type is a single pointer.
@@ -589,8 +596,14 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		cap := r.ReadInt(a.Add(2 * ptrSize))
 		add(ptr, t.Elem, cap)
 	case KindPtr:
+		addr := fmt.Sprintf("0x%x", r.ReadPtr(a))
+		if addr == "0xc0000100f0" {
+			fmt.Printf("hit")
+		}
 		if t.Elem != nil { // unsafe.Pointer has a nil Elem field.
 			add(r.ReadPtr(a), t.Elem, 1)
+		} else {
+			fmt.Printf("unsafe.Pointer: 0x%x, address: 0x%x\n", a, r.ReadPtr(a))
 		}
 	case KindFunc:
 		// The referent is a closure. We don't know much about the
