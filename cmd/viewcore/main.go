@@ -761,6 +761,9 @@ func genRefPath(slice []string) string {
 	for index, value := range slice {
 		// 2. remove unprintable
 		newValue := strings.Map(func(r rune) rune {
+			if r == '+' || r == '?' {
+				return '.'
+			}
 			if unicode.IsPrint(r) {
 				return r
 			}
@@ -772,7 +775,7 @@ func genRefPath(slice []string) string {
 	return strings.Join(reverse, "\n")
 }
 
-var minPrintRatio = 0.0001
+var minPrintRatio = float64(0)
 
 // return the printed size
 func printRefPath(w *os.File, path []string, total int64, node *GCNode) int64 {
@@ -1040,7 +1043,7 @@ func typeName(c *gocore.Process, x gocore.Object) string {
 			name = fmt.Sprintf("[%d]%s", repeat, name)
 		}
 	}
-	return name + fmt.Sprintf("0x%x", x)
+	return name + fmt.Sprintf(" 0x%x", x)
 }
 
 // fieldName returns the name of the field at offset off in x.

@@ -351,10 +351,13 @@ func (p *Process) typeHeap() {
 		// add records the fact that we know the object at address a has
 		// r copies of type t.
 		add := func(a core.Address, t *Type, r int64) {
-			fmt.Printf("address: 0x%x, type: %v\n", a, t.Name)
+			fmt.Printf("add, address: 0x%x, type name: %v, type kind: %v\n", a, t.Name, t.Kind)
 			addr := fmt.Sprintf("0x%x", a)
 			if addr == "0xc000096090" || addr == "0xc0000980d0" || addr == "0xc00000e010" {
 				fmt.Printf("foo\n")
+			}
+			if addr == "0xc008c2a068" {
+				fmt.Printf("bar\n")
 			}
 			if a == 0 { // nil pointer
 				return
@@ -542,6 +545,9 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 	case KindEface, KindIface:
 		// interface. Use the type word to determine the type
 		// of the pointed-to object.
+		if a == 0 {
+			return
+		}
 		typPtr := r.ReadPtr(a)
 		if typPtr == 0 { // nil interface
 			return
@@ -550,9 +556,13 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		if t.Kind == KindIface {
 			typPtr = p.proc.ReadPtr(typPtr.Add(p.findType("runtime.itab").field("_type").Off))
 		}
+		if typPtr == 0 { // nil interface
+			return
+		}
 		// TODO: for KindEface, type typPtr. It might point to the heap
 		// if the type was allocated with reflect.
 		typ := p.runtimeType2Type(typPtr)
+		fmt.Printf("interface, addr: 0x%x, typPtr: 0x%x, type name: %v, typ kind: %v\n", a, typPtr, typ.Name, typ.Kind)
 		typr := region{p: p, a: typPtr, typ: p.findType("runtime._type")}
 		if typr.Field("kind").Uint8()&uint8(p.rtConstants["kindDirectIface"]) == 0 {
 			// Indirect interface: the interface introduced a new
@@ -561,7 +571,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			add(r.ReadPtr(data), typ, 1)
 			return
 		} else {
-			fmt.Printf("foo")
+			fmt.Printf("foo\n")
 		}
 
 		// Direct interface: the contained type is a single pointer.
@@ -569,6 +579,15 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		directTyp := typ
 	findDirect:
 		for {
+			if t.Name == "sync.entry<interface{}>" && directTyp.Kind == KindStruct {
+				if directTyp.Name == "*http.connPool" {
+					for _, f := range directTyp.Fields {
+						fmt.Printf("fields, *http.connPool, f.Type name: %v\n", f.Type.Name)
+					}
+				}
+				// data = r.ReadPtr(data)
+				break
+			}
 			if directTyp.Kind == KindArray {
 				directTyp = typ.Elem
 				continue findDirect
@@ -586,6 +605,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			}
 			break
 		}
+		fmt.Printf("interface, addr: 0x%x, typPtr: 0x%x, type name: %v, directTyp name: %v\n", a, typPtr, typ.Name, directTyp.Name)
 		add(data, directTyp, 1)
 	case KindString:
 		ptr := r.ReadPtr(a)
@@ -603,6 +623,9 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		if t.Elem != nil { // unsafe.Pointer has a nil Elem field.
 			add(r.ReadPtr(a), t.Elem, 1)
 		} else {
+			if addr == "0xc008c2a068" {
+				fmt.Printf("bar\n")
+			}
 			fmt.Printf("unsafe.Pointer: 0x%x, address: 0x%x\n", a, r.ReadPtr(a))
 		}
 	case KindFunc:
@@ -654,7 +677,17 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		}
 		// TODO: also special case for channels?
 		for _, f := range t.Fields {
-			p.typeObject(a.Add(f.Off), f.Type, r, add)
+			if t.Name == "sync.entry" && f.Name == "p" && f.Type.Name == "unsafe.Pointer" {
+				// f.Type.Name = "unsafe.Pointer<interface{}>"
+				iface := &Type{
+					Name: "sync.entry<interface{}>",
+					Kind: KindEface,
+				}
+				fmt.Printf("sync.entry, addr: 0x%x, ptr: 0x%x\n", a.Add(f.Off), r.ReadPtr(a.Add(f.Off)))
+				p.typeObject(r.ReadPtr(a.Add(f.Off)), iface, r, add)
+			} else {
+				p.typeObject(a.Add(f.Off), f.Type, r, add)
+			}
 		}
 	default:
 		panic(fmt.Sprintf("unknown type kind %s\n", t.Kind))
