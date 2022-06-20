@@ -126,6 +126,20 @@ var (
 		Run:   runObjref,
 	}
 
+	cmdReadMap = &cobra.Command{
+		Use:   "readmap <address>",
+		Short: "read a map from address",
+		Args:  cobra.ExactArgs(1),
+		Run:   runReadMap,
+	}
+
+	cmdReadEface = &cobra.Command{
+		Use:   "readEface <address>",
+		Short: "read a map from address",
+		Args:  cobra.ExactArgs(1),
+		Run:   runReadEface,
+	}
+
 	cmdReachable = &cobra.Command{
 		Use:   "reachable <address>",
 		Short: "find path from root to an object",
@@ -186,6 +200,8 @@ func init() {
 		cmdObjects,
 		cmdObjgraph,
 		cmdObjref,
+		cmdReadMap,
+		cmdReadEface,
 		cmdReachable,
 		cmdHTML,
 		cmdRead)
@@ -647,6 +663,115 @@ func addGCRoot(node *GCNode) {
 
 	// mark visited for root node
 	visitedNodes[n.addr] = n
+}
+
+func findObject(addr core.Address, c *gocore.Process) gocore.Object {
+	var target gocore.Object
+	c.ForEachObject(func(x gocore.Object) bool {
+		if c.Addr(x) == addr {
+			target = x
+			return false
+		}
+		return true
+	})
+	return target
+}
+
+func runReadEface(cmd *cobra.Command, args []string) {
+	p, c, err := readCore()
+	if err != nil {
+		exitf("%v\n", err)
+	}
+	arg, err := strconv.ParseInt(args[0], 16, 64)
+	if err != nil {
+		exitf("invalid address %v, err: %v\n", args[0], err)
+	}
+	addr := core.Address(uint64(arg))
+	target := findObject(addr, c)
+	if target == 0 {
+		fmt.Println("not found")
+		return
+	}
+	fmt.Printf("found target Eface: 0x%x, type: %v, size: %v\n", c.Addr(target), typeName(c, target), c.Size(target))
+	typ, repeat := c.Type(target)
+	if typ != nil {
+		fmt.Printf("type, name: %v, repeat: %v\n", typ.Name, repeat)
+	} else {
+		fmt.Printf("no type found\n")
+	}
+	gocore.ReadEface(c.Addr(target), typ, p, c)
+}
+
+func runReadMap(cmd *cobra.Command, args []string) {
+	p, c, err := readCore()
+	if err != nil {
+		exitf("%v\n", err)
+	}
+	arg, err := strconv.ParseInt(args[0], 16, 64)
+	if err != nil {
+		exitf("invalid address %v, err: %v\n", args[0], err)
+	}
+	addr := core.Address(uint64(arg))
+	var target gocore.Object
+	c.ForEachObject(func(x gocore.Object) bool {
+		if c.Addr(x) == addr {
+			target = x
+			return false
+		}
+		return true
+	})
+	if target == 0 {
+		fmt.Println("not found")
+		return
+	}
+
+	fmt.Printf("found target map: 0x%x, type: %v, size: %v\n", c.Addr(target), typeName(c, target), c.Size(target))
+	typ, repeat := c.Type(target)
+	fmt.Printf("type, name: %v, repeat: %v\n", typ.Name, repeat)
+
+	if !strings.HasPrefix(typ.Name, "hash<") {
+		fmt.Printf("not hash type")
+		return
+	}
+
+	var bPtr core.Address
+	var bTyp *gocore.Type
+	var n int64
+	for _, f := range typ.Fields {
+		if f.Name == "buckets" {
+			bPtr = p.ReadPtr(addr.Add(f.Off))
+			bTyp = f.Type.Elem
+		}
+		if f.Name == "B" {
+			n = int64(1) << p.ReadUint8(addr.Add(f.Off))
+		}
+	}
+	fmt.Printf("buckets, addr: 0x%x, type name: %v, kind: %v, num: %v\n", bPtr, bTyp.Name, bTyp.Kind, n)
+
+	var keyPtr, valuePtr core.Address
+	var keyTyp, valueTyp *gocore.Type
+	for _, f := range bTyp.Fields {
+		if f.Name == "keys" {
+			keyPtr = bPtr.Add(f.Off)
+			keyTyp = f.Type
+		}
+		if f.Name == "values" {
+			valuePtr = bPtr.Add(f.Off)
+			valueTyp = f.Type
+		}
+	}
+	for j := int64(0); j < n; j++ {
+		nKeyPtr := keyPtr.Add(bTyp.Size * j)
+		nValuePtr := valuePtr.Add(bTyp.Size * j)
+
+		fmt.Printf("n: %d, keys, addr: 0x%x, type name: %v, kind: %v, num: %v\n", j+1, nKeyPtr, keyTyp.Name, keyTyp.Kind, keyTyp.Count)
+		fmt.Printf("n: %d, values, addr: 0x%x, type name: %v, kind: %v, num: %v\n", j+1, nValuePtr, valueTyp.Name, valueTyp.Kind, valueTyp.Count)
+
+		for i := int64(0); i < keyTyp.Count; i++ {
+			fmt.Printf("key %v:", j*8+i+1)
+			gocore.ReadEface(nKeyPtr.Add(keyTyp.Elem.Size*i), keyTyp.Elem, p, c)
+		}
+	}
 }
 
 func runObjref(cmd *cobra.Command, args []string) {
