@@ -126,11 +126,11 @@ var (
 		Run:   runObjref,
 	}
 
-	cmdReadMap = &cobra.Command{
-		Use:   "readmap <address>",
-		Short: "read a map from address",
+	cmdReadObj = &cobra.Command{
+		Use:   "readobj <address>",
+		Short: "read a gc object from address",
 		Args:  cobra.ExactArgs(1),
-		Run:   runReadMap,
+		Run:   runReadObj,
 	}
 
 	cmdReadEface = &cobra.Command{
@@ -200,7 +200,7 @@ func init() {
 		cmdObjects,
 		cmdObjgraph,
 		cmdObjref,
-		cmdReadMap,
+		cmdReadObj,
 		cmdReadEface,
 		cmdReachable,
 		cmdHTML,
@@ -566,33 +566,35 @@ type GCNode struct {
 	refs []*GCRef
 }
 
-func addUniqueChildNodes(node *GCNode) {
-	if _, ok := visitedNodes[node.addr]; !ok {
-		panic("add children for not visited node")
-		return
-	}
-
+func addUniqueChildNodes(nodes []*GCNode) {
 	// width first visit
 	cnodes := []*GCNode{}
-	refs := allGCNodes[node.addr].refs // all refered child nodes
-	for _, ref := range refs {
-		if _, ok := visitedNodes[ref.node.addr]; ok {
-			continue
-		}
-		newNode := nodeCopy(ref.node)
-		newRef := &GCRef{
-			node: newNode,
-			link: ref.link,
+
+	for _, node := range nodes {
+		if _, ok := visitedNodes[node.addr]; !ok {
+			panic("add children for not visited node")
+			return
 		}
 
-		node.refs = append(node.refs, newRef)
-		visitedNodes[newNode.addr] = newNode
+		refs := allGCNodes[node.addr].refs // all refered child nodes
+		for _, ref := range refs {
+			if _, ok := visitedNodes[ref.node.addr]; ok {
+				continue
+			}
+			newNode := nodeCopy(ref.node)
+			newRef := &GCRef{
+				node: newNode,
+				link: ref.link,
+			}
 
-		cnodes = append(cnodes, newNode)
+			node.refs = append(node.refs, newRef)
+			visitedNodes[newNode.addr] = newNode
+
+			cnodes = append(cnodes, newNode)
+		}
 	}
-
-	for _, cnode := range cnodes {
-		addUniqueChildNodes(cnode)
+	if len(cnodes) > 0 {
+		addUniqueChildNodes(cnodes)
 	}
 }
 
@@ -647,7 +649,7 @@ func nodeCopy(node *GCNode) *GCNode {
 	return &newNode
 }
 
-func addGCRoot(node *GCNode) {
+func addGCRoot(node *GCNode, delay bool) {
 	if n, ok := rootGCNodesMap[node.addr]; ok {
 		// there may have empty slices
 		if node.size == n.size && n.size == 0 {
@@ -656,10 +658,12 @@ func addGCRoot(node *GCNode) {
 		err := fmt.Sprintf("duplicated GC root node: %v, existing: %v", node, n)
 		panic(err)
 	}
-	rootGCNodesMap[node.addr] = node
 
 	n := nodeCopy(node)
-	rootGCNodes = append(rootGCNodes, n)
+	if !delay {
+		rootGCNodes = append(rootGCNodes, n)
+		rootGCNodesMap[node.addr] = node
+	}
 
 	// mark visited for root node
 	visitedNodes[n.addr] = n
@@ -702,7 +706,7 @@ func runReadEface(cmd *cobra.Command, args []string) {
 	gocore.ReadEface(c.Addr(target), typ, p, c)
 }
 
-func runReadMap(cmd *cobra.Command, args []string) {
+func runReadObj(cmd *cobra.Command, args []string) {
 	p, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
@@ -725,53 +729,62 @@ func runReadMap(cmd *cobra.Command, args []string) {
 		return
 	}
 
-	fmt.Printf("found target map: 0x%x, type: %v, size: %v\n", c.Addr(target), typeName(c, target), c.Size(target))
 	typ, repeat := c.Type(target)
-	fmt.Printf("type, name: %v, repeat: %v\n", typ.Name, repeat)
+	fmt.Printf("found target: 0x%x, repeat: %v, size: %v\n", c.Addr(target), repeat, c.Size(target))
 
-	if !strings.HasPrefix(typ.Name, "hash<") {
-		fmt.Printf("not hash type")
-		return
+	if typ == nil {
+		fmt.Printf("not found type\n")
+		gocore.ReadEface(addr, typ, p, c)
+	} else {
+		fmt.Printf("type, name: %v, kind: %v\n", typ.Name, typ.Kind)
+		gocore.ReadObj(addr, typ, p, c)
 	}
 
-	var bPtr core.Address
-	var bTyp *gocore.Type
-	var n int64
-	for _, f := range typ.Fields {
-		if f.Name == "buckets" {
-			bPtr = p.ReadPtr(addr.Add(f.Off))
-			bTyp = f.Type.Elem
+	/*
+		if !strings.HasPrefix(typ.Name, "hash<") {
+			fmt.Printf("not hash type")
+			return
 		}
-		if f.Name == "B" {
-			n = int64(1) << p.ReadUint8(addr.Add(f.Off))
-		}
-	}
-	fmt.Printf("buckets, addr: 0x%x, type name: %v, kind: %v, num: %v\n", bPtr, bTyp.Name, bTyp.Kind, n)
 
-	var keyPtr, valuePtr core.Address
-	var keyTyp, valueTyp *gocore.Type
-	for _, f := range bTyp.Fields {
-		if f.Name == "keys" {
-			keyPtr = bPtr.Add(f.Off)
-			keyTyp = f.Type
+		var bPtr core.Address
+		var bTyp *gocore.Type
+		var n int64
+		for _, f := range typ.Fields {
+			if f.Name == "buckets" {
+				bPtr = p.ReadPtr(addr.Add(f.Off))
+				bTyp = f.Type.Elem
+			}
+			if f.Name == "B" {
+				n = int64(1) << p.ReadUint8(addr.Add(f.Off))
+			}
 		}
-		if f.Name == "values" {
-			valuePtr = bPtr.Add(f.Off)
-			valueTyp = f.Type
-		}
-	}
-	for j := int64(0); j < n; j++ {
-		nKeyPtr := keyPtr.Add(bTyp.Size * j)
-		nValuePtr := valuePtr.Add(bTyp.Size * j)
+		fmt.Printf("buckets, addr: 0x%x, type name: %v, kind: %v, num: %v\n", bPtr, bTyp.Name, bTyp.Kind, n)
 
-		fmt.Printf("n: %d, keys, addr: 0x%x, type name: %v, kind: %v, num: %v\n", j+1, nKeyPtr, keyTyp.Name, keyTyp.Kind, keyTyp.Count)
-		fmt.Printf("n: %d, values, addr: 0x%x, type name: %v, kind: %v, num: %v\n", j+1, nValuePtr, valueTyp.Name, valueTyp.Kind, valueTyp.Count)
-
-		for i := int64(0); i < keyTyp.Count; i++ {
-			fmt.Printf("key %v:", j*8+i+1)
-			gocore.ReadEface(nKeyPtr.Add(keyTyp.Elem.Size*i), keyTyp.Elem, p, c)
+		var keyPtr, valuePtr core.Address
+		var keyTyp, valueTyp *gocore.Type
+		for _, f := range bTyp.Fields {
+			if f.Name == "keys" {
+				keyPtr = bPtr.Add(f.Off)
+				keyTyp = f.Type
+			}
+			if f.Name == "values" {
+				valuePtr = bPtr.Add(f.Off)
+				valueTyp = f.Type
+			}
 		}
-	}
+		for j := int64(0); j < n; j++ {
+			nKeyPtr := keyPtr.Add(bTyp.Size * j)
+			nValuePtr := valuePtr.Add(bTyp.Size * j)
+
+			fmt.Printf("n: %d, keys, addr: 0x%x, type name: %v, kind: %v, num: %v\n", j+1, nKeyPtr, keyTyp.Name, keyTyp.Kind, keyTyp.Count)
+			fmt.Printf("n: %d, values, addr: 0x%x, type name: %v, kind: %v, num: %v\n", j+1, nValuePtr, valueTyp.Name, valueTyp.Kind, valueTyp.Count)
+
+			for i := int64(0); i < keyTyp.Count; i++ {
+				fmt.Printf("key %v:", j*8+i+1)
+				gocore.ReadEface(nKeyPtr.Add(keyTyp.Elem.Size*i), keyTyp.Elem, p, c)
+			}
+		}
+	*/
 }
 
 func runObjref(cmd *cobra.Command, args []string) {
@@ -803,7 +816,7 @@ func runObjref(cmd *cobra.Command, args []string) {
 	for _, r := range c.Globals() {
 		size := c.Size(gocore.Object(r.Addr))
 		rNode := checkGCNodeCreated(r.Name, r.Addr, size)
-		addGCRoot(rNode)
+		addGCRoot(rNode, false)
 
 		c.ForEachRootPtr(r, func(i int64, y gocore.Object, j int64) bool {
 			cNode := checkGCNodeCreated(typeName(c, y), c.Addr(y), c.Size(y))
@@ -814,7 +827,7 @@ func runObjref(cmd *cobra.Command, args []string) {
 	for _, g := range c.Goroutines() {
 		gName := fmt.Sprintf("go%x", g.Addr())
 		gNode := checkGCNodeCreated(gName, g.Addr(), c.Size(gocore.Object(g.Addr())))
-		addGCRoot(gNode)
+		addGCRoot(gNode, true)
 
 		for fi, f := range g.Frames() {
 			fNode := findOrCreateGCNode(f.Func().Name(), f.Max(), 0)
@@ -834,10 +847,15 @@ func runObjref(cmd *cobra.Command, args []string) {
 	}
 
 	// unique ref: only need one ref for one gc obj
-	// order: globals first, then goroutines
-	for _, rn := range rootGCNodes {
-		addUniqueChildNodes(rn)
+	// order: globals first
+	addUniqueChildNodes(rootGCNodes)
+	for _, g := range c.Goroutines() {
+		gName := fmt.Sprintf("go%x", g.Addr())
+		gNode := checkGCNodeCreated(gName, g.Addr(), c.Size(gocore.Object(g.Addr())))
+		addGCRoot(gNode, false)
 	}
+	// next, goroutines
+	addUniqueChildNodes(rootGCNodes)
 
 	allObjSize := int64(0)
 	for _, node := range allGCNodes {

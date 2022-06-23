@@ -583,15 +583,22 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		directTyp := typ
 	findDirect:
 		for {
-			name := directTyp.Name
-			if newTypName, ok := SymbolNameMap[name]; ok {
-				directTyp = p.findType(newTypName)
-				if directTyp == nil {
-					panic(fmt.Sprintf("not found type: %v", newTypName))
-				}
+			if newTyp := ReFindType(directTyp, p); newTyp != directTyp {
+				directTyp = newTyp
 				data = r.ReadPtr(data)
 				break
 			}
+			/*
+				name := directTyp.Name
+				if newTypName, ok := SymbolNameMap[name]; ok {
+					directTyp = p.findType(newTypName)
+					if directTyp == nil {
+						panic(fmt.Sprintf("not found type: %v", newTypName))
+					}
+					data = r.ReadPtr(data)
+					break
+				}
+			*/
 			/*
 				if directTyp.Kind == KindStruct {
 					// FIXME: hack type
