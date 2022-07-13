@@ -6,9 +6,8 @@ package gocore
 
 import (
 	"fmt"
-	"strings"
-
 	"golang.org/x/debug/internal/core"
+	"strings"
 )
 
 // A Type is the representation of the type of a Go object.
@@ -352,13 +351,15 @@ func (p *Process) typeHeap() {
 		// r copies of type t.
 		add := func(a core.Address, t *Type, r int64) {
 			// fmt.Printf("add, address: 0x%x, type name: %v, type kind: %v\n", a, t.Name, t.Kind)
-			addr := fmt.Sprintf("0x%x", a)
-			if addr == "0xc000096090" || addr == "0xc0000980d0" || addr == "0xc00000e010" {
-				fmt.Printf("foo\n")
-			}
-			if addr == "0xc008c2a068" {
-				fmt.Printf("bar\n")
-			}
+			/*
+				addr := fmt.Sprintf("0x%x", a)
+				if addr == "0xc000096090" || addr == "0xc0000980d0" || addr == "0xc00000e010" {
+					fmt.Printf("foo\n")
+				}
+				if addr == "0xc008c2a068" {
+					fmt.Printf("bar\n")
+				}
+			*/
 			if a == 0 { // nil pointer
 				return
 			}
@@ -575,7 +576,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			add(r.ReadPtr(data), typ, 1)
 			return
 		} else {
-			fmt.Printf("foo\n")
+			// fmt.Printf("foo\n")
 		}
 
 		// Direct interface: the contained type is a single pointer.
@@ -717,8 +718,37 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 					Name: "sync.entry<interface{}>",
 					Kind: KindEface,
 				}
-				fmt.Printf("sync.entry, addr: 0x%x, ptr: 0x%x\n", a.Add(f.Off), r.ReadPtr(a.Add(f.Off)))
+				// fmt.Printf("sync.entry, addr: 0x%x, ptr: 0x%x\n", a.Add(f.Off), r.ReadPtr(a.Add(f.Off)))
 				p.typeObject(r.ReadPtr(a.Add(f.Off)), iface, r, add)
+
+			} else if t.Name == "sync.Pool" && f.Name == "local" && f.Type.Name == "unsafe.Pointer" {
+				// TODO: also handle victim
+				var size uint64
+				for _, f := range t.Fields {
+					if f.Name == "localSize" {
+						size = p.proc.ReadUint64(a.Add(f.Off))
+					}
+					// fmt.Printf("field: %v, a: %v, f.Off: %v, size: %v\n", f.Name, a, f.Off, size)
+				}
+				// fmt.Printf("Pool.local, t.name: %v\n", t.Name)
+				// fmt.Printf("Array count: %v\n", array.Count)
+				typ := p.findType("sync.poolLocal")
+				// fmt.Printf("sync.poolLocal type, name: %v, kind: %v, size: %v, count: %v\n", typ.Name, typ.Kind, typ.Size, typ.Count)
+
+				array := &Type{
+					Name:  "[P]poolLocal",
+					Kind:  KindArray,
+					Count: int64(size),
+					Size:  int64(size) * typ.Size,
+					Elem:  typ,
+				}
+				ptr := &Type{
+					Name: "*[P]poolLocal",
+					Kind: KindPtr,
+					Elem: array,
+				}
+				p.typeObject(a.Add(f.Off), ptr, r, add)
+
 			} else {
 				p.typeObject(a.Add(f.Off), f.Type, r, add)
 			}

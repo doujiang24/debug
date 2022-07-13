@@ -703,7 +703,7 @@ func runReadEface(cmd *cobra.Command, args []string) {
 	} else {
 		fmt.Printf("no type found\n")
 	}
-	gocore.ReadEface(c.Addr(target), typ, p, c)
+	gocore.ReadEface(c.Addr(target), typ, p, c, 1)
 }
 
 func runReadObj(cmd *cobra.Command, args []string) {
@@ -734,10 +734,10 @@ func runReadObj(cmd *cobra.Command, args []string) {
 
 	if typ == nil {
 		fmt.Printf("not found type\n")
-		gocore.ReadEface(addr, typ, p, c)
+		gocore.ReadEface(addr, typ, p, c, 1)
 	} else {
 		fmt.Printf("type, name: %v, kind: %v\n", typ.Name, typ.Kind)
-		gocore.ReadObj(addr, typ, p, c)
+		gocore.ReadObj(addr, typ, p, c, 1)
 	}
 
 	/*
@@ -926,7 +926,7 @@ func printRefPath(w *os.File, path []string, total int64, node *GCNode) int64 {
 		return 0
 	}
 	printedSize := int64(0)
-	path = append(path, node.name)
+	path = append(path, fmt.Sprintf("%v 0x%x", node.name, node.addr))
 	for _, ref := range node.refs {
 		rPath := path
 		if ref.link != "" {
