@@ -116,6 +116,10 @@ func (p *Process) runtimeType2Type(a core.Address) *Type {
 		return t
 	}
 
+	if a == 70835840 {
+		fmt.Println("hit")
+	}
+
 	// Read runtime._type.size
 	r := region{p: p, a: a, typ: p.findType("runtime._type")}
 	size := int64(r.Field("size").Uintptr())
@@ -150,6 +154,12 @@ func (p *Process) runtimeType2Type(a core.Address) *Type {
 	// Read ptr/nonptr bits
 	ptrSize := p.proc.PtrSize()
 	nptrs := int64(r.Field("ptrdata").Uintptr()) / ptrSize
+
+	// hack nptrs, it may be very big, no reason yet.
+	if nptrs > 1024*10 {
+		nptrs = 10
+	}
+
 	var ptrs []int64
 	if r.Field("kind").Uint8()&uint8(p.rtConstants["kindGCProg"]) == 0 {
 		gcdata := r.Field("gcdata").Address()
@@ -171,6 +181,23 @@ func (p *Process) runtimeType2Type(a core.Address) *Type {
 			candidates = append(candidates, t)
 		}
 	}
+	/*
+		if len(candidates) == 0 {
+			name1 := strings.TrimPrefix(name, "*")
+			if _, ok := SymbolNameMap[name]; ok {
+				for key, list := range p.runtimeNameMap {
+					if strings.HasPrefix(key, "*gitlab.alipay-ant-") && strings.HasSuffix(key, name1) {
+						for _, t := range list {
+							if len(ptrs) > 0 && size == t.Size && equal(ptrs, t.ptrs()) {
+								fmt.Printf("Match suffix, %v => %v\n", key, name)
+								candidates = append(candidates, t)
+							}
+						}
+					}
+				}
+			}
+		}
+	*/
 	var t *Type
 	if len(candidates) > 0 {
 		// If a runtime type matches more than one DWARF type,
@@ -179,6 +206,30 @@ func (p *Process) runtimeType2Type(a core.Address) *Type {
 		// For example, [32]uint8 appears twice.
 		// TODO: investigate the reason for this duplication.
 		t = candidates[0]
+
+		if len(candidates) > 1 {
+			for i, t := range candidates {
+				fmt.Printf("#%d, typPtr, %v, name: %v, kind: %v, size: %v\n", i, a, t.Name, t.Kind, t.Size)
+			}
+
+			if a == 68596288 {
+				for _, ti := range candidates {
+					if ti.Name == "*context.valueCtx" {
+						t = ti
+					}
+				}
+			} else if a == 68253728 {
+				for _, ti := range candidates {
+					if ti.Name == "*gitlab.alipay-inc.com/ant-mesh/mosn/vendor/mosn.io/mosn/pkg/context.valueCtx" {
+						t = ti
+					}
+				}
+			}
+		}
+
+		if t.Name == "*http.connPool" {
+			fmt.Printf("type, kind: %v\n", t.Kind)
+		}
 	} else {
 		// There's no corresponding DWARF type.  Make our own.
 		t = &Type{Name: name, Size: size, Kind: KindStruct}
@@ -208,6 +259,9 @@ func (p *Process) runtimeType2Type(a core.Address) *Type {
 		if t.Size%ptrSize != 0 {
 			// TODO: tail of <ptrSize data.
 		}
+	}
+	if t.Name == "*http.connPool" {
+		fmt.Printf("type, kind: %v\n", t.Kind)
 	}
 	// Memoize.
 	p.runtimeMap[a] = t
@@ -562,6 +616,15 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			typPtr = p.proc.ReadPtr(typPtr.Add(p.findType("runtime.itab").field("_type").Off))
 		}
 		if typPtr == 0 { // nil interface
+			return
+		}
+		// hack for invalid typePtr
+		m := p.proc.FindMapping(typPtr)
+		if m == nil {
+			fmt.Printf("typPtr out of memory address: %v\n", typPtr)
+			return
+		}
+		if typPtr == 4294967295 { // hack 0xffffffff
 			return
 		}
 		// TODO: for KindEface, type typPtr. It might point to the heap

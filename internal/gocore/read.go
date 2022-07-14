@@ -146,13 +146,14 @@ func ReadPtr(a core.Address, t *Type, r reader, p *Process, level int) {
 	}
 
 	ptr := r.ReadPtr(a)
-	if t.Elem == nil {
+
+	typ := t.Elem
+	if typ == nil {
 		fmt.Printf("unsafe.pointer, address: 0x%x, ptr: 0x%x\n", a, ptr)
 	} else {
-		typ := t.Elem
 		fmt.Printf("pointer, address: 0x%x, ptr: 0x%x, type name: %v, kind: %v\n", a, ptr, typ.Name, typ.Kind)
 
-		typ = ReFindType(typ, p)
+		// typ = ReFindType(typ, p)
 
 		if ptr != 0 {
 			ReadObj(ptr, typ, r, p, level+1)
@@ -224,7 +225,7 @@ func ReadArray(a core.Address, t *Type, r reader, p *Process, level int) {
 	}
 
 	typ := t.Elem
-	len := typ.Count
+	len := t.Count
 	// len = 25
 
 	fmt.Printf("Level(%d), Array, address: 0x%x, len: %d, type, name: %v, kind: %v\n", level, a, len, typ.Name, typ.Kind)

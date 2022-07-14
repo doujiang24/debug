@@ -16,6 +16,8 @@ package main
 import (
 	"fmt"
 	"io"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"runtime/debug"
 	"runtime/pprof"
@@ -707,6 +709,9 @@ func runReadEface(cmd *cobra.Command, args []string) {
 }
 
 func runReadObj(cmd *cobra.Command, args []string) {
+	go func() {
+		http.ListenAndServe(":6060", nil)
+	}()
 	p, c, err := readCore()
 	if err != nil {
 		exitf("%v\n", err)
