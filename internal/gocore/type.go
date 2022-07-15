@@ -263,6 +263,12 @@ func (p *Process) runtimeType2Type(a core.Address) *Type {
 	if t.Name == "*http.connPool" {
 		fmt.Printf("type, kind: %v\n", t.Kind)
 	}
+
+	if t.Name == "*gitlab.alipay-inc.com/ant-mesh/mosn/vendor/mosn.io/mosn/pkg/stream/http.httpBuffers" ||
+		t.Name == "*gitlab.alipay-inc.com/ant-mesh/mosn/vendor/mosn.io/mosn/pkg/stream/http.serverStream" {
+		l := p.runtimeNameMap[name]
+		fmt.Printf("type, kind: %v, l.len: %d\n", t.Kind, len(l))
+	}
 	// Memoize.
 	p.runtimeMap[a] = t
 
@@ -401,6 +407,13 @@ func (p *Process) typeHeap() {
 		}
 		var work []workRecord
 
+		appendWork := func(w workRecord) {
+			if w.a == 825365401144 {
+				fmt.Printf("hit L2\n")
+			}
+			work = append(work, w)
+		}
+
 		// add records the fact that we know the object at address a has
 		// r copies of type t.
 		add := func(a core.Address, t *Type, r int64) {
@@ -421,7 +434,16 @@ func (p *Process) typeHeap() {
 			if i < 0 { // pointer doesn't point to an object in the Go heap
 				return
 			}
+			if a == 0xc05b71aa80 {
+				fmt.Printf("hit\n")
+			}
 			if off == 0 {
+				obj, _ := p.FindObject(a)
+				objSize := p.Size(obj)
+				if r*t.Size > objSize {
+					fmt.Printf("ERROR: calculated size(%d * %d = %d) bigger than object size(%d), skipping it ...\n", r, t.Size, r*t.Size, objSize)
+					return
+				}
 				// We have a 0-offset typing. Replace existing 0-offset typing
 				// if the new one is larger.
 				ot := p.types[i].t
@@ -429,14 +451,14 @@ func (p *Process) typeHeap() {
 				if ot == nil || r*t.Size > or*ot.Size {
 					if t == ot {
 						// Scan just the new section.
-						work = append(work, workRecord{
+						appendWork(workRecord{
 							a: a.Add(or * ot.Size),
 							t: t,
 							r: r - or,
 						})
 					} else {
 						// Rescan the whole typing using the updated type.
-						work = append(work, workRecord{
+						appendWork(workRecord{
 							a: a,
 							t: t,
 							r: r,
@@ -505,7 +527,7 @@ func (p *Process) typeHeap() {
 			// with an existing chunk (or chunks), those will get rescanned.
 			// Duplicate work, but that's ok. TODO: but could be expensive.
 			if addWork {
-				work = append(work, workRecord{
+				appendWork(workRecord{
 					a: a.Add(c.off - off),
 					t: c.t,
 					r: c.r,

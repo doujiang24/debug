@@ -155,7 +155,8 @@ func ReadPtr(a core.Address, t *Type, r reader, p *Process, level int) {
 
 		// typ = ReFindType(typ, p)
 
-		if ptr != 0 {
+		// hack for 0xffffffff, 4294967295
+		if ptr != 0 && ptr != 4294967295 {
 			ReadObj(ptr, typ, r, p, level+1)
 		}
 	}
@@ -169,6 +170,10 @@ func ReadObj(a core.Address, t *Type, r reader, p *Process, level int) {
 			fmt.Printf("%v\n", name)
 		}
 		level++
+	}
+	if level > 20 {
+		fmt.Printf("skipping level(%d)\n", level)
+		return
 	}
 	key := fmt.Sprintf("0x%x-%v-%v", a, t.Name, t.Kind)
 	if v, ok := ReadedObjs[key]; ok && v {
