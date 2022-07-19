@@ -97,7 +97,7 @@ func (p *Process) DynamicType(t *Type, a core.Address) *Type {
 		if x == 0 {
 			return nil
 		}
-		return p.runtimeType2Type(x)
+		return p.runtimeType2Type(x, a.Add(p.proc.PtrSize()))
 	case KindIface:
 		x := p.proc.ReadPtr(a)
 		if x == 0 {
@@ -105,13 +105,13 @@ func (p *Process) DynamicType(t *Type, a core.Address) *Type {
 		}
 		// Read type out of itab.
 		x = p.proc.ReadPtr(x.Add(p.proc.PtrSize()))
-		return p.runtimeType2Type(x)
+		return p.runtimeType2Type(x, a.Add(p.proc.PtrSize()))
 	}
 }
 
 // Convert the address of a runtime._type to a *Type.
 // Guaranteed to return a non-nil *Type.
-func (p *Process) runtimeType2Type(a core.Address) *Type {
+func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	if t := p.runtimeMap[a]; t != nil {
 		return t
 	}
@@ -205,31 +205,32 @@ func (p *Process) runtimeType2Type(a core.Address) *Type {
 		// This looks mostly harmless. DWARF has some redundant entries.
 		// For example, [32]uint8 appears twice.
 		// TODO: investigate the reason for this duplication.
-		t = candidates[0]
 
 		if len(candidates) > 1 {
 			for i, t := range candidates {
 				fmt.Printf("#%d, typPtr, %v, name: %v, kind: %v, size: %v\n", i, a, t.Name, t.Kind, t.Size)
 			}
 
-			if a == 68596288 {
-				for _, ti := range candidates {
-					if ti.Name == "*context.valueCtx" {
-						t = ti
+			// got two candicates, ptr types.
+			if candidates[0].Size == ptrSize && nptrs == 1 {
+				o := p.proc.ReadPtr(d)
+				size := p.Size(Object(o))
+				var tmp []*Type
+				for _, t := range candidates {
+					if t.Elem != nil && t.Elem.Size == size {
+						tmp = append(tmp, t)
 					}
 				}
-			} else if a == 68253728 {
-				for _, ti := range candidates {
-					if ti.Name == "*gitlab.alipay-inc.com/ant-mesh/mosn/vendor/mosn.io/mosn/pkg/context.valueCtx" {
-						t = ti
-					}
+				if len(tmp) == 1 {
+					fmt.Printf("reduced candidates by matching elem object size\n")
+				}
+				if len(tmp) > 0 {
+					candidates = tmp
 				}
 			}
 		}
+		t = candidates[0]
 
-		if t.Name == "*http.connPool" {
-			fmt.Printf("type, kind: %v\n", t.Kind)
-		}
 	} else {
 		// There's no corresponding DWARF type.  Make our own.
 		t = &Type{Name: name, Size: size, Kind: KindStruct}
@@ -651,7 +652,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		}
 		// TODO: for KindEface, type typPtr. It might point to the heap
 		// if the type was allocated with reflect.
-		typ := p.runtimeType2Type(typPtr)
+		typ := p.runtimeType2Type(typPtr, a.Add(ptrSize))
 		// fmt.Printf("interface, addr: 0x%x, typPtr: 0x%x, type name: %v, typ kind: %v\n", a, typPtr, typ.Name, typ.Kind)
 		typr := region{p: p, a: typPtr, typ: p.findType("runtime._type")}
 		if typr.Field("kind").Uint8()&uint8(p.rtConstants["kindDirectIface"]) == 0 {

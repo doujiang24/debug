@@ -51,7 +51,7 @@ func ReadEface(a core.Address, t *Type, r reader, p *Process, level int) {
 		fmt.Println("nil interface")
 		return
 	}
-	typ := p.runtimeType2Type(typPtr)
+	typ := p.runtimeType2Type(typPtr, a.Add(ptrSize))
 	data := a.Add(ptrSize)
 	dataPtr := r.ReadPtr(data)
 	fmt.Printf("type, name: %v, kind: %v, data: 0x%x, data ptr: 0x%x\n", typ.Name, typ.Kind, data, dataPtr)
@@ -104,8 +104,8 @@ func ReadIface(a core.Address, t *Type, r reader, p *Process, level int) {
 		return
 	}
 
-	typ := p.runtimeType2Type(typPtr)
 	data := a.Add(ptrSize)
+	typ := p.runtimeType2Type(typPtr, data)
 	dataPtr := r.ReadPtr(data)
 	fmt.Printf("type, name: %v, kind: %v, data: 0x%x, data ptr: 0x%x\n", typ.Name, typ.Kind, data, dataPtr)
 
