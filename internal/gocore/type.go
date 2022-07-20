@@ -117,7 +117,7 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 		return t
 	}
 
-	if a == 70835840 {
+	if a == 21696736 {
 		fmt.Println("hit")
 	}
 
@@ -680,6 +680,24 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			size2 := p.Size(Object(ptr2))
 			fmt.Printf("size2: %d, typ field 0 size: %d\n", size2, typ.Fields[0].Type.Size)
 			debugHit()
+		}
+		if dataPtr == 0xc00043c468 {
+			fmt.Printf("interface, addr: 0x%x, data: 0x%x, dataPtr: 0x%x, typPtr: 0x%x, type name: %s, typ kind: %v, typ size: %v\n", a, data, dataPtr, typPtr, typ.Name, typ.Kind, typ.Size)
+			size := p.Size(Object(dataPtr))
+			fmt.Printf("size: %v\n", size)
+
+			typeName := "*cache.cache"
+			s := p.runtimeNameMap[typeName]
+			stype := s[0]
+			add(data, stype, 1)
+
+			fmt.Printf("type name: %s, typ kind: %v, typ size: %v\n", stype.Name, stype.Kind, stype.Size)
+
+			ptr2 := r.ReadPtr(dataPtr)
+			size2 := p.Size(Object(ptr2))
+			fmt.Printf("size2: %d, typ field 0 size: %d\n", size2, typ.Fields[0].Type.Size)
+
+			return
 		}
 		typr := region{p: p, a: typPtr, typ: p.findType("runtime._type")}
 		if typr.Field("kind").Uint8()&uint8(p.rtConstants["kindDirectIface"]) == 0 {
