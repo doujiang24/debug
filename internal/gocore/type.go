@@ -7,6 +7,7 @@ package gocore
 import (
 	"fmt"
 	"golang.org/x/debug/internal/core"
+	"regexp"
 	"strings"
 )
 
@@ -615,6 +616,9 @@ func (fr *frameReader) ReadUint8(a core.Address) uint8 {
 	return fr.p.proc.ReadUint8(a)
 }
 
+// main.(*Bar).started-fm
+var methodRegexp = regexp.MustCompile(`^([\w]+)\.\(\*([\w]+)\)\.[\w-]+$`)
+
 // typeObject takes an address and a type for the data at that address.
 // For each pointer it finds in the memory at that address, it calls add with the pointer
 // and the type + repeat count of the thing that it points to.
@@ -771,6 +775,30 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			// TODO: better value for size?
 			f.closure = ft
 		}
+		if matches := methodRegexp.FindStringSubmatch(f.name); len(matches) == 3 {
+			typeName := "*" + matches[1] + "." + matches[2]
+			s := p.runtimeNameMap[typeName]
+			if len(s) == 0 {
+				fmt.Printf("not found type(%v) for method(%v)\n", typeName, f.name)
+			} else {
+				typ := s[0]
+				ptr := closure.Add(p.proc.PtrSize())
+				p.typeObject(ptr, typ, r, add)
+			}
+		} else {
+			fmt.Printf("func name (%v) does not looks like a method\n", f.name)
+		}
+		/*
+			if f.name == "main.(*Bar).started-fm" {
+				ptr := closure.Add(p.proc.PtrSize())
+				o := r.ReadPtr(ptr)
+				fmt.Printf("ptr: 0x%x, obj: 0x%x\n", a.Add(p.proc.PtrSize()), o)
+				size := p.Size(Object(o))
+				fmt.Printf("size: %d\n", size)
+				typ := p.findType("*main.Bar")
+				p.typeObject(ptr, typ, r, add)
+			}
+		*/
 		p.typeObject(closure, ft, r, add)
 	case KindArray:
 		n := t.Elem.Size

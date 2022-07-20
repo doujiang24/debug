@@ -166,8 +166,16 @@ var ReadedObjs = make(map[string]bool)
 
 func ReadObj(a core.Address, t *Type, r reader, p *Process, level int) {
 	if level == 0 {
-		for name, _ := range p.runtimeNameMap {
+		for name, l := range p.runtimeNameMap {
 			fmt.Printf("%v\n", name)
+			for i, t := range l {
+				fmt.Printf("%v, %d: %v\n", name, i, t.Kind)
+				if t.Kind == KindStruct {
+					for j, f := range t.Fields {
+						fmt.Printf("-- %d: %v\n", j, f.Name)
+					}
+				}
+			}
 		}
 		level++
 	}

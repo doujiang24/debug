@@ -742,7 +742,7 @@ func runReadObj(cmd *cobra.Command, args []string) {
 		gocore.ReadEface(addr, typ, p, c, 1)
 	} else {
 		fmt.Printf("type, name: %v, kind: %v\n", typ.Name, typ.Kind)
-		gocore.ReadObj(addr, typ, p, c, 1)
+		gocore.ReadObj(addr, typ, p, c, 0)
 	}
 
 	/*
