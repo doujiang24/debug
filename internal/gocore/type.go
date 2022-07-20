@@ -663,10 +663,9 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		// TODO: for KindEface, type typPtr. It might point to the heap
 		// if the type was allocated with reflect.
 		typ := p.runtimeType2Type(typPtr, a.Add(ptrSize))
+		size := p.Size(Object(dataPtr))
+		fmt.Printf("interface, addr: 0x%x, data: 0x%x, dataPtr: 0x%x, typPtr: 0x%x, type name: %s, typ kind: %v, typ size: %v, data obj size: %v\n", a, data, dataPtr, typPtr, typ.Name, typ.Kind, typ.Size, size)
 		if dataPtr == 0xc0004bc008 {
-			fmt.Printf("interface, addr: 0x%x, data: 0x%x, dataPtr: 0x%x, typPtr: 0x%x, type name: %s, typ kind: %v, typ size: %v\n", a, data, dataPtr, typPtr, typ.Name, typ.Kind, typ.Size)
-			size := p.Size(Object(dataPtr))
-			fmt.Printf("size: %v\n", size)
 			typeName := "*internal.InformersMap"
 			s := p.runtimeNameMap[typeName]
 			if len(s) == 0 {
@@ -682,28 +681,15 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			debugHit()
 		}
 		if dataPtr == 0xc00043c468 {
-			fmt.Printf("interface, addr: 0x%x, data: 0x%x, dataPtr: 0x%x, typPtr: 0x%x, type name: %s, typ kind: %v, typ size: %v\n", a, data, dataPtr, typPtr, typ.Name, typ.Kind, typ.Size)
-			size := p.Size(Object(dataPtr))
-			fmt.Printf("size: %v\n", size)
-
 			typeName := "*cache.cache"
 			s := p.runtimeNameMap[typeName]
 			stype := s[0]
 			add(data, stype, 1)
 
 			fmt.Printf("type name: %s, typ kind: %v, typ size: %v\n", stype.Name, stype.Kind, stype.Size)
-
-			ptr2 := r.ReadPtr(dataPtr)
-			size2 := p.Size(Object(ptr2))
-			fmt.Printf("size2: %d, typ field 0 size: %d\n", size2, typ.Fields[0].Type.Size)
-
 			return
 		}
 		if dataPtr == 0xc00022e770 {
-			fmt.Printf("interface, addr: 0x%x, data: 0x%x, dataPtr: 0x%x, typPtr: 0x%x, type name: %s, typ kind: %v, typ size: %v\n", a, data, dataPtr, typPtr, typ.Name, typ.Kind, typ.Size)
-			size := p.Size(Object(dataPtr))
-			fmt.Printf("size: %v\n", size)
-
 			typeName := "*k8sstore.myThreadSafeStore"
 			s := p.runtimeNameMap[typeName]
 			stype := s[0]
