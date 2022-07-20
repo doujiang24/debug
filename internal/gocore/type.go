@@ -639,6 +639,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			return
 		}
 		data := a.Add(ptrSize)
+		dataPtr := r.ReadPtr(data)
 		if t.Kind == KindIface {
 			typPtr = p.proc.ReadPtr(typPtr.Add(p.findType("runtime.itab").field("_type").Off))
 		}
@@ -657,7 +658,7 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		// TODO: for KindEface, type typPtr. It might point to the heap
 		// if the type was allocated with reflect.
 		typ := p.runtimeType2Type(typPtr, a.Add(ptrSize))
-		// fmt.Printf("interface, addr: 0x%x, typPtr: 0x%x, type name: %v, typ kind: %v\n", a, typPtr, typ.Name, typ.Kind)
+		fmt.Printf("interface, addr: 0x%x, data: 0x%x, dataPtr: 0x%x, typPtr: 0x%x, type name: %v, typ kind: %v\n", a, data, dataPtr, typPtr, typ.Name, typ.Kind)
 		typr := region{p: p, a: typPtr, typ: p.findType("runtime._type")}
 		if typr.Field("kind").Uint8()&uint8(p.rtConstants["kindDirectIface"]) == 0 {
 			// Indirect interface: the interface introduced a new
