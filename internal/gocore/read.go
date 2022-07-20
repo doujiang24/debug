@@ -274,12 +274,28 @@ func ReadStruct(a core.Address, t *Type, r reader, p *Process, level int) {
 	}
 
 	fmt.Printf("Level(%d), Reading struct, address: 0x%x, type, name: %v, fields num: %v\n", level, a, t.Name, len(t.Fields))
+
+	count := int64(0)
+	if strings.HasPrefix(t.Name, "hash<") {
+		for i, f := range t.Fields {
+			if f.Name == "count" {
+				count = p.proc.ReadInt(a.Add(f.Off))
+			}
+		}
+	}
+
 	for i, f := range t.Fields {
 		fmt.Printf("Level(%d), Field, (%d), name: %v\n", level, i+1, f.Name)
 		if f.Name == "pool" && t.Name == "gitlab.alipay-inc.com/ant-mesh/mosn/vendor/mosn.io/mosn/pkg/stream/http.activeClient" {
 			fmt.Printf("dead loop, skipping\n")
 		} else {
 			ReadObj(a.Add(f.Off), f.Type, r, p, level+1)
+		}
+		if f.Name == "buckets" && count > 1 {
+			for i := int64(1); i < count; i++ {
+				fmt.Printf("Level(%d), bucket (%d)\n", level, i)
+				ReadObj(p.proc.ReadPtr(a.Add(f.Off)).Add(f.Type.Elem.Size*i), f.Type.Elem, r, p, level+1)
+			}
 		}
 	}
 	fmt.Printf("Level(%d), Finished struct, address: 0x%x, type, name: %v, fields num: %v\n", level, a, t.Name, len(t.Fields))
