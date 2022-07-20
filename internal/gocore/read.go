@@ -277,11 +277,12 @@ func ReadStruct(a core.Address, t *Type, r reader, p *Process, level int) {
 
 	count := int64(0)
 	if strings.HasPrefix(t.Name, "hash<") {
-		for i, f := range t.Fields {
-			if f.Name == "count" {
-				count = p.proc.ReadInt(a.Add(f.Off))
+		for _, f := range t.Fields {
+			if f.Name == "B" {
+				count = 1 << p.proc.ReadUint8(a.Add(f.Off))
 			}
 		}
+		fmt.Printf("count: %d\n", count)
 	}
 
 	for i, f := range t.Fields {
