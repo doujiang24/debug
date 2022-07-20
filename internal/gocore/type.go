@@ -698,6 +698,15 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			fmt.Printf("type name: %s, typ kind: %v, typ size: %v\n", stype.Name, stype.Kind, stype.Size)
 			return
 		}
+		if dataPtr == 0xc0008d3d40 {
+			typeName := "*cache.threadSafeMap"
+			s := p.runtimeNameMap[typeName]
+			stype := s[0]
+			add(data, stype, 1)
+
+			fmt.Printf("type name: %s, typ kind: %v, typ size: %v\n", stype.Name, stype.Kind, stype.Size)
+			return
+		}
 		typr := region{p: p, a: typPtr, typ: p.findType("runtime._type")}
 		if typr.Field("kind").Uint8()&uint8(p.rtConstants["kindDirectIface"]) == 0 {
 			// Indirect interface: the interface introduced a new

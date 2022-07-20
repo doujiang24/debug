@@ -923,7 +923,7 @@ func genRefPath(slice []string) string {
 	return strings.Join(reverse, "\n")
 }
 
-var minPrintRatio = float64(0.0001)
+var minPrintRatio = float64(0.00001)
 
 // return the printed size
 func printRefPath(w *os.File, path []string, total int64, node *GCNode) int64 {
