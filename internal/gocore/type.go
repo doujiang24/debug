@@ -663,8 +663,11 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		// TODO: for KindEface, type typPtr. It might point to the heap
 		// if the type was allocated with reflect.
 		typ := p.runtimeType2Type(typPtr, a.Add(ptrSize))
-		fmt.Printf("interface, addr: 0x%x, data: 0x%x, dataPtr: 0x%x, typPtr: 0x%x, type name: %s, typ kind: %v\n", a, data, dataPtr, typPtr, typ.Name, typ.Kind)
 		if dataPtr == 0xc0004bc008 {
+			fmt.Printf("interface, addr: 0x%x, data: 0x%x, dataPtr: 0x%x, typPtr: 0x%x, type name: %s, typ kind: %v, typ size: %v\n", a, data, dataPtr, typPtr, typ.Name, typ.Kind, typ.Size)
+			size := p.Size(Object(dataPtr))
+			fmt.Printf("size: %v\n", size)
+			add(dataPtr, typ, 1)
 			debugHit()
 		}
 		typr := region{p: p, a: typPtr, typ: p.findType("runtime._type")}
