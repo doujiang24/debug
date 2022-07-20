@@ -110,6 +110,17 @@ func (p *Process) DynamicType(t *Type, a core.Address) *Type {
 	}
 }
 
+func readvarint(p *Process, a core.Address) (int64, int64) {
+	v := 0
+	for i := 0; ; i++ {
+		x := p.proc.ReadUint8(a.Add(int64(i + 1)))
+		v += int(x&0x7f) << (7 * i)
+		if x&0x80 == 0 {
+			return int64(i + 1), int64(v)
+		}
+	}
+}
+
 // Convert the address of a runtime._type to a *Type.
 // Guaranteed to return a non-nil *Type.
 func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
@@ -138,7 +149,9 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	var name string
 	if m != nil {
 		x := m.types.Add(int64(r.Field("str").Int32()))
-		n := uint16(p.proc.ReadUint8(x.Add(1)))<<8 + uint16(p.proc.ReadUint8(x.Add(2)))
+		n1 := p.proc.ReadUint8(x.Add(1))
+		n2 := p.proc.ReadUint8(x.Add(2))
+		n := uint16(n1)<<8 + uint16(n2)
 		b := make([]byte, n)
 		p.proc.ReadAt(b, x.Add(3))
 		name = string(b)
@@ -150,6 +163,16 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 		// TODO: The actual name is in the runtime.reflectOffs map.
 		// Too hard to look things up in maps here, just allocate a placeholder for now.
 		name = fmt.Sprintf("reflect.generatedType%x", a)
+	}
+	if m != nil {
+		x := m.types.Add(int64(r.Field("str").Int32()))
+		i, l := readvarint(p, x)
+		b := make([]byte, l)
+		p.proc.ReadAt(b, x.Add(i+1))
+		name = string(b)
+		if r.Field("tflag").Uint8()&uint8(p.rtConstants["tflagExtraStar"]) != 0 {
+			name = name[1:]
+		}
 	}
 
 	// Read ptr/nonptr bits
@@ -429,6 +452,9 @@ func (p *Process) typeHeap() {
 					fmt.Printf("bar\n")
 				}
 			*/
+			if a == 0xc000d94000 {
+				fmt.Printf("hit\n")
+			}
 			if a == 0 { // nil pointer
 				return
 			}
@@ -559,6 +585,9 @@ func (p *Process) typeHeap() {
 				continue
 			}
 			for i := int64(0); i < c.r; i++ {
+				if c.a == 0xc000d94000 {
+					fmt.Printf("hit\n")
+				}
 				p.typeObject(c.a.Add(i*c.t.Size), c.t, p.proc, add)
 			}
 		}
@@ -629,6 +658,9 @@ var methodRegexp = regexp.MustCompile(`([\w]+)\.\(\*([\w]+)\)\.[\w-]+$`)
 // and the type + repeat count of the thing that it points to.
 func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Address, *Type, int64)) {
 	ptrSize := p.proc.PtrSize()
+	if a == 0xc000d94000 {
+		fmt.Printf("hit\n")
+	}
 
 	switch t.Kind {
 	case KindBool, KindInt, KindUint, KindFloat, KindComplex:
@@ -645,6 +677,9 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		}
 		data := a.Add(ptrSize)
 		dataPtr := r.ReadPtr(data)
+		if dataPtr == 0xc320980000 {
+			fmt.Printf("hit unk\n")
+		}
 		if t.Kind == KindIface {
 			typPtr = p.proc.ReadPtr(typPtr.Add(p.findType("runtime.itab").field("_type").Off))
 		}
@@ -663,50 +698,52 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 		// TODO: for KindEface, type typPtr. It might point to the heap
 		// if the type was allocated with reflect.
 		typ := p.runtimeType2Type(typPtr, a.Add(ptrSize))
-		size := p.Size(Object(dataPtr))
-		fmt.Printf("interface, addr: 0x%x, data: 0x%x, dataPtr: 0x%x, typPtr: 0x%x, type name: %s, typ kind: %v, typ size: %v, data obj size: %v\n", a, data, dataPtr, typPtr, typ.Name, typ.Kind, typ.Size, size)
-		if dataPtr == 0xc0004bc008 {
-			typeName := "*internal.InformersMap"
-			s := p.runtimeNameMap[typeName]
-			if len(s) == 0 {
-				fmt.Printf("not found type(%v)\n", typeName)
-			} else {
-				styp := s[0]
-				typ.Fields[0].Type = styp
+		// size := p.Size(Object(dataPtr))
+		// fmt.Printf("interface, addr: 0x%x, data: 0x%x, dataPtr: 0x%x, typPtr: 0x%x, type name: %s, typ kind: %v, typ size: %v, data obj size: %v\n", a, data, dataPtr, typPtr, typ.Name, typ.Kind, typ.Size, size)
+		/*
+			if dataPtr == 0xc0004bc008 {
+				typeName := "*internal.InformersMap"
+				s := p.runtimeNameMap[typeName]
+				if len(s) == 0 {
+					fmt.Printf("not found type(%v)\n", typeName)
+				} else {
+					styp := s[0]
+					typ.Fields[0].Type = styp
+				}
+				add(dataPtr, typ, 1)
+				ptr2 := r.ReadPtr(dataPtr)
+				size2 := p.Size(Object(ptr2))
+				fmt.Printf("size2: %d, typ field 0 size: %d\n", size2, typ.Fields[0].Type.Size)
+				debugHit()
 			}
-			add(dataPtr, typ, 1)
-			ptr2 := r.ReadPtr(dataPtr)
-			size2 := p.Size(Object(ptr2))
-			fmt.Printf("size2: %d, typ field 0 size: %d\n", size2, typ.Fields[0].Type.Size)
-			debugHit()
-		}
-		if dataPtr == 0xc00043c468 {
-			typeName := "*cache.cache"
-			s := p.runtimeNameMap[typeName]
-			stype := s[0]
-			add(data, stype, 1)
+			if dataPtr == 0xc00043c468 {
+				typeName := "*cache.cache"
+				s := p.runtimeNameMap[typeName]
+				stype := s[0]
+				add(data, stype, 1)
 
-			fmt.Printf("type name: %s, typ kind: %v, typ size: %v\n", stype.Name, stype.Kind, stype.Size)
-			return
-		}
-		if dataPtr == 0xc00022e770 {
-			typeName := "*k8sstore.myThreadSafeStore"
-			s := p.runtimeNameMap[typeName]
-			stype := s[0]
-			add(data, stype, 1)
+				fmt.Printf("type name: %s, typ kind: %v, typ size: %v\n", stype.Name, stype.Kind, stype.Size)
+				return
+			}
+			if dataPtr == 0xc00022e770 {
+				typeName := "*k8sstore.myThreadSafeStore"
+				s := p.runtimeNameMap[typeName]
+				stype := s[0]
+				add(data, stype, 1)
 
-			fmt.Printf("type name: %s, typ kind: %v, typ size: %v\n", stype.Name, stype.Kind, stype.Size)
-			return
-		}
-		if dataPtr == 0xc0008d3d40 {
-			typeName := "*cache.threadSafeMap"
-			s := p.runtimeNameMap[typeName]
-			stype := s[0]
-			add(data, stype, 1)
+				fmt.Printf("type name: %s, typ kind: %v, typ size: %v\n", stype.Name, stype.Kind, stype.Size)
+				return
+			}
+			if dataPtr == 0xc0008d3d40 {
+				typeName := "*cache.threadSafeMap"
+				s := p.runtimeNameMap[typeName]
+				stype := s[0]
+				add(data, stype, 1)
 
-			fmt.Printf("type name: %s, typ kind: %v, typ size: %v\n", stype.Name, stype.Kind, stype.Size)
-			return
-		}
+				fmt.Printf("type name: %s, typ kind: %v, typ size: %v\n", stype.Name, stype.Kind, stype.Size)
+				return
+			}
+		*/
 		typr := region{p: p, a: typPtr, typ: p.findType("runtime._type")}
 		if typr.Field("kind").Uint8()&uint8(p.rtConstants["kindDirectIface"]) == 0 {
 			// Indirect interface: the interface introduced a new
@@ -869,6 +906,9 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 				if f.Name == "B" {
 					n = int64(1) << p.proc.ReadUint8(a.Add(f.Off))
 				}
+			}
+			if bPtr == 0xc000d94000 {
+				fmt.Printf("hit\n")
 			}
 			add(bPtr, bTyp, n)
 			// TODO: also oldbuckets
