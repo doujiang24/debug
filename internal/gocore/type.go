@@ -617,7 +617,7 @@ func (fr *frameReader) ReadUint8(a core.Address) uint8 {
 }
 
 // main.(*Bar).started-fm
-var methodRegexp = regexp.MustCompile(`^([\w]+)\.\(\*([\w]+)\)\.[\w-]+$`)
+var methodRegexp = regexp.MustCompile(`([\w]+)\.\(\*([\w]+)\)\.[\w-]+$`)
 
 // typeObject takes an address and a type for the data at that address.
 // For each pointer it finds in the memory at that address, it calls add with the pointer
