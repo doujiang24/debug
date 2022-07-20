@@ -699,6 +699,19 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 
 			return
 		}
+		if dataPtr == 0xc00022e770 {
+			fmt.Printf("interface, addr: 0x%x, data: 0x%x, dataPtr: 0x%x, typPtr: 0x%x, type name: %s, typ kind: %v, typ size: %v\n", a, data, dataPtr, typPtr, typ.Name, typ.Kind, typ.Size)
+			size := p.Size(Object(dataPtr))
+			fmt.Printf("size: %v\n", size)
+
+			typeName := "*k8sstore.myThreadSafeStore"
+			s := p.runtimeNameMap[typeName]
+			stype := s[0]
+			add(data, stype, 1)
+
+			fmt.Printf("type name: %s, typ kind: %v, typ size: %v\n", stype.Name, stype.Kind, stype.Size)
+			return
+		}
 		typr := region{p: p, a: typPtr, typ: p.findType("runtime._type")}
 		if typr.Field("kind").Uint8()&uint8(p.rtConstants["kindDirectIface"]) == 0 {
 			// Indirect interface: the interface introduced a new
