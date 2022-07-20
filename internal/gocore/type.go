@@ -667,7 +667,18 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			fmt.Printf("interface, addr: 0x%x, data: 0x%x, dataPtr: 0x%x, typPtr: 0x%x, type name: %s, typ kind: %v, typ size: %v\n", a, data, dataPtr, typPtr, typ.Name, typ.Kind, typ.Size)
 			size := p.Size(Object(dataPtr))
 			fmt.Printf("size: %v\n", size)
+			typeName := "*internal.InformersMap"
+			s := p.runtimeNameMap[typeName]
+			if len(s) == 0 {
+				fmt.Printf("not found type(%v)\n", typeName)
+			} else {
+				styp := s[0]
+				typ.Fields[0].Type = styp
+			}
 			add(dataPtr, typ, 1)
+			ptr2 := r.ReadPtr(dataPtr)
+			size2 := p.Size(Object(ptr2))
+			fmt.Printf("size2: %d, typ field 0 size: %d\n", size2, typ.Fields[0].Type.Size)
 			debugHit()
 		}
 		typr := region{p: p, a: typPtr, typ: p.findType("runtime._type")}
