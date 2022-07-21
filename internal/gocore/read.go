@@ -311,13 +311,13 @@ func ReadString(a core.Address, t *Type, r reader, p *Process) {
 	len := r.ReadInt(a.Add(ptrSize))
 
 	fmt.Printf("string, len: %v, data: 0x%x\n", len, data)
-	if data != 0 {
+	if data == 0 && len > 0 {
+		fmt.Printf("Error: invalid string data pointer: 0x%x\n", data)
+	} else {
 		fmt.Printf("string value: \"")
 		for i := int64(0); i < len; i++ {
 			fmt.Printf("%c", r.ReadUint8(data.Add(i)))
 		}
 		fmt.Printf("\"\n")
-	} else {
-		fmt.Printf("Error: invalid string data pointer: %v", data)
 	}
 }
