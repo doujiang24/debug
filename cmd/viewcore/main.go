@@ -811,15 +811,15 @@ func runObjref(cmd *cobra.Command, args []string) {
 		c.ForEachPtr(x, func(i int64, y gocore.Object, j int64) bool {
 			if x == 0xc000d94000 {
 				n := gocore.Object(core.Address(y).Add(j))
-				fmt.Printf("intersted x, parent: 0x%x, child: 0x%x, i: %d, j: %d, n: 0x%x, n type: %v\n", x, y, i, j, n, typeName(c, n))
+				fmt.Printf("intersted x, parent: 0x%x, child: 0x%x, i: %d, j: %d, n: 0x%x, n type: %v, field name: %v\n", x, y, i, j, n, typeName(c, n), fieldName(c, x, i))
 			}
 			if x == 0xc320980000 {
 				n := gocore.Object(core.Address(y).Add(j))
-				fmt.Printf("intersted x, parent: 0x%x, child: 0x%x, i: %d, j: %d, n: 0x%x, n type: %v\n", x, y, i, j, n, typeName(c, n))
+				fmt.Printf("intersted x, parent: 0x%x, child: 0x%x, i: %d, j: %d, n: 0x%x, n type: %v, field name: %v\n", x, y, i, j, n, typeName(c, n), fieldName(c, x, i))
 			}
 			if y == 0xc320980000 {
 				n := gocore.Object(core.Address(y).Add(j))
-				fmt.Printf("intersted x, parent: 0x%x, child: 0x%x, i: %d, j: %d, n: 0x%x, n type: %v\n", x, y, i, j, n, typeName(c, n))
+				fmt.Printf("intersted x, parent: 0x%x, child: 0x%x, i: %d, j: %d, n: 0x%x, n type: %v, field name: %v\n", x, y, i, j, n, typeName(c, n), fieldName(c, x, i))
 			}
 			yNode := findOrCreateGCNode(typeName(c, y), c.Addr(y), c.Size(y))
 			xNode.appendChild(yNode, fieldName(c, x, i))
