@@ -455,6 +455,9 @@ func (p *Process) typeHeap() {
 			if a == 0xc000d94000 {
 				fmt.Printf("hit\n")
 			}
+			if a == 0xc320980000 {
+				fmt.Printf("hit unk\n")
+			}
 			if a == 0 { // nil pointer
 				return
 			}
@@ -660,6 +663,9 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 	ptrSize := p.proc.PtrSize()
 	if a == 0xc000d94000 {
 		fmt.Printf("hit\n")
+	}
+	if a == 0xc320980000 {
+		fmt.Printf("hit unk\n")
 	}
 
 	switch t.Kind {
@@ -909,6 +915,9 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			}
 			if bPtr == 0xc000d94000 {
 				fmt.Printf("hit\n")
+			}
+			if bPtr == 0xc320980000 {
+				fmt.Printf("hit unk\n")
 			}
 			add(bPtr, bTyp, n)
 			// TODO: also oldbuckets

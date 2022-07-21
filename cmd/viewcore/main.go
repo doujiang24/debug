@@ -809,6 +809,15 @@ func runObjref(cmd *cobra.Command, args []string) {
 		sumObjSize += c.Size(x)
 		xNode := findOrCreateGCNode(typeName(c, x), c.Addr(x), c.Size(x))
 		c.ForEachPtr(x, func(i int64, y gocore.Object, j int64) bool {
+			if x == 0xc000d94000 {
+				fmt.Printf("intersted x, parent: 0x%x, child: 0x%x, i: %d, j: %d\n", x, y, i, j)
+			}
+			if x == 0xc320980000 {
+				fmt.Printf("intersted x, parent: 0x%x, child: 0x%x, i: %d, j: %d\n", x, y, i, j)
+			}
+			if y == 0xc320980000 {
+				fmt.Printf("intersted y, parent: 0x%x, child: 0x%x, i: %d, j: %d\n", x, y, i, j)
+			}
 			yNode := findOrCreateGCNode(typeName(c, y), c.Addr(y), c.Size(y))
 			xNode.appendChild(yNode, fieldName(c, x, i))
 			return true
