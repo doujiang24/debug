@@ -110,14 +110,21 @@ func (p *Process) DynamicType(t *Type, a core.Address) *Type {
 	}
 }
 
-func readvarint(p *Process, a core.Address) (int64, int64) {
-	v := 0
-	for i := 0; ; i++ {
-		x := p.proc.ReadUint8(a.Add(int64(i + 1)))
-		v += int(x&0x7f) << (7 * i)
-		if x&0x80 == 0 {
-			return int64(i + 1), int64(v)
+func readNameLen(p *Process, a core.Address) (int64, int64) {
+	if p.minorVersion >= 17 {
+		v := 0
+		for i := 0; ; i++ {
+			x := p.proc.ReadUint8(a.Add(int64(i + 1)))
+			v += int(x&0x7f) << (7 * i)
+			if x&0x80 == 0 {
+				return int64(i + 1), int64(v)
+			}
 		}
+	} else {
+		n1 := p.proc.ReadUint8(a.Add(1))
+		n2 := p.proc.ReadUint8(a.Add(2))
+		n := uint16(n1)<<8 + uint16(n2)
+		return 2, int64(n)
 	}
 }
 
@@ -166,7 +173,7 @@ func (p *Process) runtimeType2Type(a core.Address, d core.Address) *Type {
 	}
 	if m != nil {
 		x := m.types.Add(int64(r.Field("str").Int32()))
-		i, l := readvarint(p, x)
+		i, l := readNameLen(p, x)
 		b := make([]byte, l)
 		p.proc.ReadAt(b, x.Add(i+1))
 		name = string(b)
@@ -915,6 +922,13 @@ func (p *Process) typeObject(a core.Address, t *Type, r reader, add func(core.Ad
 			}
 			if bPtr == 0xc000d94000 {
 				fmt.Printf("hit\n")
+				typeName := "v1.Pod"
+				s := p.runtimeNameMap[typeName]
+				typ := s[0]
+				addr := 0xc320980000
+				size := p.Size(Object(addr))
+				n := size / typ.Size
+				add(core.Address(addr), typ, n)
 			}
 			if bPtr == 0xc320980000 {
 				fmt.Printf("hit unk\n")
